@@ -159,3 +159,9 @@ With end-to-end encryption on, file **contents** are encrypted in your vault bef
 ## License
 
 MIT
+
+## Support
+
+Power Connect is built and maintained by one person. If it earns a place in your
+daily vault, you can [buy me a coffee](https://buymeacoffee.com/powerplugins).
+Nothing in the plugin is held back either way.
