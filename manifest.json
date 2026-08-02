@@ -1,0 +1,11 @@
+{
+	"id": "powerconnect",
+	"name": "Power Connect",
+	"version": "1.15.10",
+	"minAppVersion": "1.5.0",
+	"description": "Sync your vault to your own Dropbox, OneDrive, or Google Drive, and share folders or notes with other people, with optional end-to-end encryption.",
+	"author": "Power Plugins",
+	"authorUrl": "https://github.com/obsidian-power-plugins",
+	"fundingUrl": "https://buymeacoffee.com/powerplugins",
+	"isDesktopOnly": false
+}

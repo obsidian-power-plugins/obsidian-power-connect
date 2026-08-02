@@ -1,0 +1,555 @@
+/* Power Connect styles. Theme variables only, so light and dark both work. */
+
+/* ---------------- status bar ---------------- */
+
+.pcon-status {
+	cursor: default;
+	font-variant-numeric: tabular-nums;
+}
+
+.pcon-status[data-pcon="error"] {
+	color: var(--text-error);
+}
+
+.pcon-status[data-pcon="warn"] {
+	color: var(--text-warning);
+}
+
+.pcon-status[data-pcon="sync"] {
+	color: var(--text-accent);
+}
+
+.pcon-status[data-pcon="off"] {
+	color: var(--text-faint);
+}
+
+/* ---------------- modals ---------------- */
+
+.pcon-modal .pcon-muted {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	line-height: 1.45;
+}
+
+.pcon-modal .pcon-steps {
+	margin: 6px 0 12px;
+	padding-left: 20px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	line-height: 1.5;
+}
+
+.pcon-modal .pcon-steps li {
+	margin-bottom: 6px;
+}
+
+.pcon-modal .pcon-steps .pcon-scopes {
+	margin: 4px 0 0;
+	padding-left: 18px;
+	list-style: disc;
+}
+
+.pcon-modal .pcon-steps .pcon-scopes li {
+	margin-bottom: 2px;
+}
+
+/* setup wizard */
+
+.pcon-modal .pcon-wiz-dots {
+	display: flex;
+	gap: 6px;
+	margin: 2px 0 14px;
+}
+
+.pcon-modal .pcon-wiz-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--background-modifier-border);
+}
+
+.pcon-modal .pcon-wiz-dot.is-done {
+	background: var(--text-faint);
+}
+
+.pcon-modal .pcon-wiz-dot.is-active {
+	background: var(--interactive-accent);
+}
+
+.pcon-modal .pcon-wiz-footer {
+	margin-top: 20px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.pcon-modal .pcon-wiz-footer .setting-item {
+	border: none !important;
+	padding: 20px 0 4px !important;
+	margin: 0;
+}
+
+.pcon-modal .pcon-wiz-result {
+	min-height: 1.4em;
+	font-size: var(--font-ui-small);
+}
+
+/* passphrase pair: a fixed width so the boxes align regardless of how wide
+   their labels are (a 100% width input inherits the label's leftover space) */
+.pcon-modal .pcon-pass-input {
+	width: 300px;
+	max-width: 100%;
+}
+
+/* master switch above the settings tabs */
+
+.pcon-master .setting-item {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	padding: 12px 14px;
+	margin: 10px 0 4px;
+}
+
+.pcon-wide-input {
+	width: 100%;
+	min-width: 240px;
+}
+
+.pcon-warnbox {
+	margin: 8px 0;
+	padding: 8px 11px;
+	border: 1px solid var(--background-modifier-error);
+	border-radius: 8px;
+	background: var(--background-modifier-error-hover);
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+	line-height: 1.45;
+}
+
+.pcon-plan-h {
+	margin: 14px 0 4px;
+	font-size: var(--font-ui-small);
+	font-weight: var(--font-semibold);
+	color: var(--text-normal);
+}
+
+.pcon-plan-list {
+	max-height: 220px;
+	overflow-y: auto;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	padding: 4px 8px;
+	font-size: var(--font-ui-small);
+}
+
+.pcon-plan-item {
+	padding: 2px 0;
+	color: var(--text-muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.pcon-applyall {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 10px 0 4px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+}
+
+/* ---------------- sync log ---------------- */
+
+.pcon-log {
+	max-height: 340px;
+	overflow-y: auto;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	padding: 6px 10px;
+	font-size: var(--font-ui-small);
+	font-variant-numeric: tabular-nums;
+}
+
+.pcon-log-row {
+	display: flex;
+	gap: 8px;
+	padding: 1px 0;
+	color: var(--text-muted);
+}
+
+.pcon-log-ts {
+	color: var(--text-faint);
+	flex-shrink: 0;
+}
+
+.pcon-log-row.pcon-log-error {
+	color: var(--text-error);
+}
+
+.pcon-log-row.pcon-log-warn {
+	color: var(--text-warning);
+}
+
+.pcon-log-row.pcon-log-debug {
+	color: var(--text-faint);
+}
+
+/* ---------------- settings frame (family pattern) ---------------- */
+
+.pcon-settings-search {
+	margin: 4px 0 10px;
+}
+
+.pcon-settings-search-input {
+	width: 100%;
+}
+
+.pcon-settings-tabs {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 2px;
+	margin: 2px 0 18px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+/* the compound selector outranks Obsidian's own settings-area button chrome
+   (a .vertical-tab-content button rule) so the tabs render flat, not as boxes */
+.pcon-settings-tabs button.pcon-settings-tab,
+.pcon-settings-tabs button.pcon-settings-tab:hover,
+.pcon-settings-tabs button.pcon-settings-tab:focus,
+.pcon-settings-tabs button.pcon-settings-tab:focus-visible,
+.pcon-settings-tabs button.pcon-settings-tab:active {
+	background: transparent;
+	border: none;
+	border-radius: 0;
+	box-shadow: none;
+	outline: none;
+	margin: 0 0 -1px 0;
+	padding: 7px 14px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	font-weight: var(--font-medium);
+	border-bottom: 2px solid transparent;
+	cursor: default;
+	transition:
+		color 120ms ease,
+		border-color 120ms ease;
+}
+
+.pcon-settings-tabs button.pcon-settings-tab:hover {
+	color: var(--text-normal);
+	border-bottom-color: var(--background-modifier-border-hover);
+}
+
+.pcon-settings-tabs button.pcon-settings-tab.is-active {
+	color: var(--text-accent);
+	font-weight: var(--font-semibold);
+	border-bottom-color: var(--interactive-accent);
+}
+
+/* the first heading inside a tab does not need its big top border */
+.pcon-settings-section:first-child .setting-item-heading {
+	border-top: none;
+	padding-top: 0;
+}
+
+/* a section's opening paragraph, styled as quiet prose */
+.pcon-section-intro {
+	border-top: none;
+	padding-top: 0;
+}
+
+.pcon-section-intro .setting-item-info {
+	margin-right: 0;
+}
+
+/* the excludes textarea deserves the row's full width */
+.pcon-excludes {
+	flex-direction: column;
+	align-items: stretch;
+}
+
+.pcon-excludes .setting-item-control {
+	justify-content: flex-start;
+	margin-top: 8px;
+}
+
+.pcon-excludes textarea {
+	width: 100%;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-small);
+}
+
+/* a small help icon after a setting name; opens the soft card below */
+.pcon-setting-help {
+	display: inline-flex;
+	margin-left: 6px;
+	vertical-align: -3px;
+	color: var(--text-faint);
+	cursor: help;
+}
+
+.pcon-setting-help:hover {
+	color: var(--text-muted);
+}
+
+.pcon-setting-help .svg-icon {
+	width: 14px;
+	height: 14px;
+}
+
+/* the help popover: a soft theme-colored card instead of the native black
+   tooltip; shows on hover, and a click pins it open */
+.pcon-help-pop {
+	position: fixed;
+	z-index: var(--layer-tooltip);
+	max-width: 340px;
+	padding: 8px 11px;
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	box-shadow: var(--shadow-s);
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	line-height: 1.45;
+}
+
+/* settings prose inside descs */
+.pcon-settings-body .pcon-muted {
+	color: var(--text-muted);
+	margin-top: 4px;
+}
+
+/* OneDrive device-code sign-in */
+
+.pcon-modal .pcon-od-code {
+	font-size: 1.6em;
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	user-select: all;
+}
+
+/* sync log controls and the usage bar */
+
+.pcon-log-bar {
+	display: flex;
+	gap: 8px;
+	margin-bottom: 8px;
+}
+
+.pcon-log-filter {
+	flex: 1;
+}
+
+.pcon-usage-bar {
+	margin-top: 6px;
+	height: 6px;
+	border-radius: 3px;
+	background: var(--background-modifier-border);
+	overflow: hidden;
+	max-width: 260px;
+}
+
+.pcon-usage-fill {
+	height: 100%;
+	border-radius: 3px;
+	background: var(--interactive-accent);
+}
+
+/* an invite code is one long unbreakable string: give it the full width of
+   the dialog, a monospace face, and room to wrap rather than a 20-column
+   default textarea nobody can read */
+textarea.pcon-share-code,
+.pcon-share-code textarea {
+	width: 100%;
+	min-height: 5.5em;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.4;
+	word-break: break-all;
+	resize: vertical;
+}
+
+.pcon-share-code {
+	flex-direction: column;
+	align-items: stretch;
+}
+
+.pcon-share-code .setting-item-control {
+	justify-content: flex-start;
+	margin-top: 8px;
+}
+
+/* what a share refuses to carry, listed under the file count */
+.pcon-share-skipped {
+	margin: 4px 0 0 0;
+	padding-left: 1.2em;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+/* ---------------- the Shares view ---------------- */
+/* a dense table, not a card grid: this has to stay readable at hundreds of
+   rows, where cards stop being scannable and start being scrolling */
+
+.pcon-shares-root {
+	padding: 0;
+	overflow: auto;
+}
+
+.pcon-shares-head {
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	background: var(--background-primary);
+	padding: 12px 16px 8px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.pcon-shares-tabs {
+	display: flex;
+	gap: 4px;
+	margin-bottom: 10px;
+}
+
+.pcon-shares-tab {
+	background: transparent;
+	border: none;
+	box-shadow: none;
+	padding: 4px 10px;
+	border-radius: var(--radius-s);
+	color: var(--text-muted);
+	cursor: pointer;
+}
+
+.pcon-shares-tab.is-active {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+	font-weight: var(--font-semibold);
+}
+
+.pcon-shares-tools {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+	flex-wrap: wrap;
+}
+
+.pcon-shares-search {
+	flex: 1 1 220px;
+	min-width: 160px;
+}
+
+.pcon-shares-banner {
+	margin: 10px 16px 0;
+	padding: 8px 12px;
+	border-radius: var(--radius-s);
+	background: var(--background-modifier-success);
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+}
+
+.pcon-shares-body {
+	padding: 8px 16px 24px;
+}
+
+.pcon-shares-table {
+	display: table;
+	width: 100%;
+	border-collapse: collapse;
+}
+
+.pcon-shares-row {
+	display: table-row;
+}
+
+.pcon-shares-row:hover:not(.is-header) .pcon-shares-cell {
+	background: var(--background-modifier-hover);
+}
+
+.pcon-shares-cell {
+	display: table-cell;
+	padding: 8px 10px;
+	border-bottom: 1px solid var(--background-modifier-border);
+	vertical-align: middle;
+	font-size: var(--font-ui-small);
+}
+
+.pcon-shares-row.is-header .pcon-shares-cell {
+	font-size: var(--font-ui-smaller);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--text-muted);
+	font-weight: var(--font-semibold);
+}
+
+.pcon-shares-cell:first-child {
+	font-weight: var(--font-semibold);
+	color: var(--text-normal);
+}
+
+.pcon-shares-badge {
+	display: inline-block;
+	margin-left: 6px;
+	padding: 1px 7px;
+	border-radius: 10px;
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	font-size: var(--font-ui-smaller);
+	white-space: nowrap;
+}
+
+.pcon-shares-actions {
+	display: flex;
+	gap: 6px;
+	justify-content: flex-end;
+	flex-wrap: wrap;
+}
+
+.pcon-shares-actions button {
+	font-size: var(--font-ui-smaller);
+	padding: 3px 9px;
+}
+
+.pcon-shares-empty {
+	padding: 32px 12px;
+	text-align: center;
+	color: var(--text-muted);
+}
+
+/* narrow panes drop the least important columns rather than scrolling */
+@media (max-width: 700px) {
+	.pcon-shares-row .pcon-shares-cell:nth-child(4) {
+		display: none;
+	}
+}
+
+/* shared items in the file list: an arrow and a coloured edge. Two signals,
+   not one, so the states stay apart without relying on colour alone */
+body {
+	--pcon-mark-out: var(--color-purple);
+	--pcon-mark-in: var(--color-cyan);
+	--pcon-mark-wait: var(--text-faint);
+	--pcon-mark-lost: var(--text-faint);
+}
+
+.pcon-share-audit .setting-item-control {
+	flex: 0 0 auto;
+}
+
+/* ---------------- notices in a light theme ----------------
+   Obsidian paints every notice as a near-black slab. In a dark theme that is
+   just the UI; in a light one it reads as an error box, whatever it says, and
+   a progress count or a to-do total is not an error. Same shape and position,
+   the theme's own surface colors. A notice carrying .pw-self-styled brings its
+   own card (Power Desk's meeting reminder) and is left alone. */
+
+body.theme-light .notice:not(.pw-self-styled) {
+	background: var(--background-primary);
+	color: var(--text-normal);
+	border: 1px solid var(--background-modifier-border);
+	box-shadow: 0 6px 22px rgba(0, 0, 0, 0.14);
+}
+
+body.theme-light .notice:not(.pw-self-styled) a {
+	color: var(--text-accent);
+}
