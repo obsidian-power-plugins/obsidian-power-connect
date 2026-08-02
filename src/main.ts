@@ -1382,25 +1382,32 @@ export default class PowerConnectPlugin extends Plugin {
 
 	/* ---------------- marking shared items in the file list ---------------- */
 
-	private markEl: HTMLStyleElement | null = null;
+	private markSheet: CSSStyleSheet | null = null;
 
 	/** Mark shared items by injecting one stylesheet keyed on the explorer's
 	 *  own data-path attributes. Same technique as Power Explorer: no
 	 *  MutationObserver, no reliance on the unofficial fileItems API, and it
 	 *  survives every re-render the explorer does on its own.
 	 *
+	 *  The selectors name the user's own share paths, so styles.css cannot
+	 *  express them. A constructable stylesheet carries them with no element in
+	 *  the document. Where it is unavailable (Safari below 16.4, so older iOS)
+	 *  the marks are skipped: they are a cue, and a missing cue beats a broken
+	 *  file list.
+	 *
 	 *  Only the home folder and individually attached notes are marked. Marking
 	 *  every descendant of a shared folder turns the sidebar into a barcode. */
 	refreshShareMarks() {
-		if (!this.markEl) {
-			this.markEl = document.head.createEl("style");
+		if (!this.markSheet) {
+			if (typeof CSSStyleSheet === "undefined" || !("replaceSync" in CSSStyleSheet.prototype)) return;
+			this.markSheet = new CSSStyleSheet();
+			document.adoptedStyleSheets = [...document.adoptedStyleSheets, this.markSheet];
 			this.register(() => {
-				this.markEl?.remove();
-				this.markEl = null;
+				document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== this.markSheet);
 			});
 		}
 		if (!this.settings.shareMarks) {
-			this.markEl.textContent = "";
+			this.markSheet.replaceSync("");
 			return;
 		}
 
@@ -1427,7 +1434,7 @@ export default class PowerConnectPlugin extends Plugin {
 				.join(",");
 			css += `${content}{content:" ${kind === "out" ? "↗" : kind === "in" ? "↙" : kind === "wait" ? "⋯" : "⊘"}";opacity:.7;font-size:.85em;}\n`;
 		}
-		this.markEl.textContent = css;
+		this.markSheet.replaceSync(css);
 	}
 
 	/** Set or clear a share's expiry. Applied to the index and keyring links,
