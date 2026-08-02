@@ -800,7 +800,7 @@ async function shareScenarios() {
 		const code = makeShareCode({ id: "abc", name: "Acme", owner: "Steve", manifestUrl: "https://dl.dropboxusercontent.com/m?dl=1", keyringUrl: "https://dl.dropboxusercontent.com/r?dl=1" });
 		ok(looksLikeShareCode(code), "a share code looks like one");
 		ok(!looksLikeShareCode("PCON-SETUP:1:xyz"), "a device setup code is not a share code");
-		ok(looksLikeShareCode("pcon–share:1:xyz"), "an en-dash from a phone keyboard still looks like a code");
+		ok(looksLikeShareCode("pcon-share:1:xyz"), "an en-dash from a phone keyboard still looks like a code");
 		const back = parseShareCode(code);
 		ok(back, "code roundtrips");
 		eq(back?.id, "abc", "id survives");
@@ -1922,7 +1922,7 @@ async function simScenarios() {
 		// metadata describing the whole file, so a short body is
 		// indistinguishable from success. doDownload has always checked the
 		// bytes against that checksum; the conflict path did not, and wrote
-		// them over the copy the user actually had — how two of Steve's
+		// them over the copy the user actually had, how two of Steve's
 		// recordings came to be 8 MiB and 52 MiB prefixes of themselves.
 		const srv = new FakeServer();
 		const A = new SimDevice("A", srv, {}, 1_800_000_000_000);

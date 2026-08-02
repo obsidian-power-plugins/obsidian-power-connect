@@ -999,8 +999,8 @@ export class SyncEngine {
 	 *  Checking in each caller instead is how one of them came to skip it: a
 	 *  conflict resolution downloaded unverified bytes, wrote them over the
 	 *  file the user actually had, and recorded the remote's hash for them. A
-	 *  short body is indistinguishable from success — the metadata still
-	 *  describes the whole file — so the write looked clean, and every later
+	 *  short body is indistinguishable from success, the metadata still
+	 *  describes the whole file, so the write looked clean, and every later
 	 *  scan compared the truncated file against a hash that was never true of
 	 *  it and saw nothing to repair. Steve's vault lost the tail of two
 	 *  recordings that way, and kept them only because the conflict copy held

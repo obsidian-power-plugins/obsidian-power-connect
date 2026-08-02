@@ -306,7 +306,7 @@ export function looksLikeShareCode(text: string): boolean {
 }
 
 /** Thrown for a version 1 invite: readable, but from the design where the
- *  key travelled in the code. Says so plainly rather than failing as if the
+ *  key traveled in the code. Says so plainly rather than failing as if the
  *  code were damaged. */
 export class ShareCodeOutdated extends Error {}
 
@@ -386,7 +386,7 @@ export interface SharePlan {
  *  what is on disk now, and the hashes of what the last pull wrote.
  *
  *  The rule that matters most is the quiet one: when the local file already
- *  matches the manifest, do nothing at all — no write, no touched mtime.
+ *  matches the manifest, do nothing at all: no write, no touched mtime.
  *  Subscribers' vaults are usually synced by something else (Obsidian Sync,
  *  OneDrive), and every device of theirs runs this. Rewriting identical bytes
  *  with a fresh timestamp would hand their own sync an endless stream of

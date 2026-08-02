@@ -1592,7 +1592,7 @@ export default class PowerConnectPlugin extends Plugin {
 				if (interactive) {
 					const choice = await new DeleteHoldModal(this.app, plan).ask();
 					if (choice === "cancel") {
-						this.log("info", "Sync cancelled at the delete review.");
+						this.log("info", "Sync canceled at the delete review.");
 						return;
 					}
 					if (choice === "skip") plan = stripDeletes(plan);
@@ -4424,7 +4424,7 @@ class PconSettingTab extends PluginSettingTab {
 
 			new Setting(c)
 				.setName("Mark shared items in the file list")
-				.setDesc("Shows a small arrow and a coloured edge beside shared folders and notes: outgoing, incoming, and waiting for approval.")
+				.setDesc("Shows a small arrow and a colored edge beside shared folders and notes: outgoing, incoming, and waiting for approval.")
 				.addToggle((t) =>
 					t.setValue(s.shareMarks).onChange((v) => {
 						s.shareMarks = v;

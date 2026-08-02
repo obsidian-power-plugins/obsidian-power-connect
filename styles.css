@@ -523,8 +523,8 @@ textarea.pcon-share-code,
 	}
 }
 
-/* shared items in the file list: an arrow and a coloured edge. Two signals,
-   not one, so the states stay apart without relying on colour alone */
+/* shared items in the file list: an arrow and a colored edge. Two signals,
+   not one, so the states stay apart without relying on color alone */
 body {
 	--pcon-mark-out: var(--color-purple);
 	--pcon-mark-in: var(--color-cyan);

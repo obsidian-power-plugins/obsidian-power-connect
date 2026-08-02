@@ -984,7 +984,7 @@ export function markerProtectedFolders(m: Marker): string[] {
 }
 
 /** Which encryption zone a path belongs to under selective protection:
- *  "plugin" for a plugin-settings file (always, except our own — these hold
+ *  "plugin" for a plugin-settings file (always, except our own, these hold
  *  API keys and must never sync in the clear), the folder key for a file
  *  inside a user-protected folder, or "" for the plain remainder.
  *
