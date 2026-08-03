@@ -1,4 +1,4 @@
-import { AbstractInputSuggest, App, ItemView, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, TFile, TFolder, WorkspaceLeaf, requestUrl, setIcon } from "obsidian";
+import { AbstractInputSuggest, App, ItemView, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, type SettingDefinitionItem, type SettingDefinitionPage, type SettingDefinitionRender, TFile, TFolder, WorkspaceLeaf, requestUrl, setIcon } from "obsidian";
 import {
 	Action,
 	BaseEntry,
@@ -4047,6 +4047,20 @@ class ReceiveShareModal extends Modal {
 	}
 }
 
+/** One row of the settings tab. `build` is handed a Setting whose name and
+ *  description are already set, so it only adds the controls. Rows are data
+ *  rather than drawing code so the two renderers cannot disagree about what
+ *  the tab holds. */
+type Row = { name: string; desc?: string; help?: string; cls?: string; aliases?: string[]; build?: (st: Setting) => void | (() => void) };
+
+/** A run of rows under one heading. Each becomes a headed group on 1.13 and
+ *  one section div in the fallback. */
+type Group = { heading?: string; rows: Row[] };
+
+/** One tab: a native settings page on Obsidian 1.13 and up, a tab button in
+ *  the fallback renderer for older builds. */
+type Page = { id: string; label: string; groups: Group[] };
+
 class PconSettingTab extends PluginSettingTab {
 	private activeTab = "account";
 	private query = "";
@@ -4060,10 +4074,14 @@ class PconSettingTab extends PluginSettingTab {
 		private plugin: PowerConnectPlugin
 	) {
 		super(app, plugin);
+		// Armed once, for the life of the tab. It used to be set in display() and
+		// cleared in hide(), which the declarative renderer would leave null after
+		// the first close, since it never calls display() again. refresh() bails
+		// when the tab is off screen, so a closed tab still costs nothing.
+		plugin.refreshSettingsTab = () => this.refresh();
 	}
 
 	hide() {
-		this.plugin.refreshSettingsTab = null;
 		this.closeHelp();
 	}
 
@@ -4110,22 +4128,169 @@ class PconSettingTab extends PluginSettingTab {
 		};
 	}
 
+	/** Redraw when the rows themselves change: a device connecting, a folder
+	 *  protected, a share arriving. Obsidian 1.13 rebuilds the tab from
+	 *  getSettingDefinitions(); older builds have only the fallback renderer.
+	 *
+	 *  The plugin calls this from everywhere sync state moves, so it bails when
+	 *  the tab is off screen rather than rebuilding a hidden container. */
+	refresh() {
+		if (!this.containerEl.isShown()) return;
+		this.closeHelp(); // whatever the popover is anchored to is about to go
+		// update() arrived with the declarative API in 1.13 and minAppVersion is
+		// still 1.8.7, so it is reached through a cast rather than named outright:
+		// an older build has no definitions to rebuild from and redraws instead.
+		const tab = this as unknown as { update?: () => void };
+		if (tab.update) tab.update();
+		else this.renderFallback();
+	}
+
+	/** The family help icon after a setting's name. */
+	private addHelp(st: Setting, text: string) {
+		const ic = st.nameEl.createSpan({ cls: "pcon-setting-help" });
+		setIcon(ic, "help-circle");
+		ic.addEventListener("mouseenter", () => this.openHelp(ic, text, false));
+		ic.addEventListener("mouseleave", () => {
+			if (!this.helpPinned && this.helpAnchor === ic) this.closeHelp();
+		});
+		ic.addEventListener("click", (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+			if (this.helpPinned && this.helpAnchor === ic) this.closeHelp();
+			else this.openHelp(ic, text, true);
+		});
+	}
+
+	/** Obsidian 1.13 and up builds the tab from these and never calls display():
+	 *  one native page per tab, standing in for the tab bar the fallback draws
+	 *  for older builds. The master switch stays above the pages, because on and
+	 *  off should never mean hunting through sections.
+	 *
+	 *  Every row renders itself rather than declaring a `control`. A declarative
+	 *  control writes through Obsidian's generic setControlValue, which would
+	 *  bypass queueSave and the settings merge behind it. */
+	getSettingDefinitions(): SettingDefinitionItem[] {
+		const pages = this.buildPages();
+		const rowsOf = new Map(pages.map((p) => [p.label, p.groups.flatMap((g) => g.rows)] as const));
+		return [
+			{
+				name: "",
+				searchable: false, // it is a masthead, not a setting
+				render: (st) => {
+					st.settingEl.empty();
+					this.renderAbout(st.settingEl);
+				},
+			},
+			this.toDefinition(this.masterRow(), "Sync"),
+			{
+				type: "group",
+				search: {
+					placeholder: "Search settings...",
+					// the entries here are whole tabs, so a tab stays up when anything
+					// inside it matches. Obsidian's own search box, top left, reaches
+					// the individual settings.
+					match: (def, query) => {
+						const q = query.trim().toLowerCase();
+						if (!q) return true;
+						const has = (v: string | undefined) => (v ?? "").toLowerCase().includes(q);
+						return (rowsOf.get(def.name) ?? []).some(
+							(r) => has(r.name) || has(r.desc) || (r.aliases ?? []).some(has)
+						);
+					},
+				},
+				items: pages.map(
+					(p): SettingDefinitionPage => ({
+						type: "page",
+						name: p.label,
+						// a lone unnamed section is the page itself, so it stays flat
+						items:
+							p.groups.length === 1 && !p.groups[0].heading
+								? p.groups[0].rows.map((r) => this.toDefinition(r, p.label))
+								: p.groups.map((g) => ({
+										type: "group" as const,
+										heading: g.heading,
+										items: g.rows.map((r) => this.toDefinition(r, p.label)),
+									})),
+					})
+				),
+			},
+		];
+	}
+
+	/** One row as a definition Obsidian can draw. The name and description are
+	 *  its to render and it rebuilds both on a redraw, so a row only hands back
+	 *  what it hung on the row element itself. */
+	private toDefinition(r: Row, page: string): SettingDefinitionRender {
+		return {
+			name: r.name,
+			desc: r.desc,
+			// searching the tab name still finds its rows, the way a heading match
+			// opened the whole section in the tab bar
+			aliases: [...(r.aliases ?? []), page],
+			render: (st) => {
+				if (r.cls) st.settingEl.addClass(r.cls);
+				const teardown = r.build?.(st);
+				if (r.help) this.addHelp(st, r.help);
+				return teardown;
+			},
+		};
+	}
+
+	/** What this plugin is and which build is running, above everything else.
+	 *  Read off the manifest so it cannot drift from the released version. */
+	private renderAbout(el: HTMLElement) {
+		el.addClass("pcon-about");
+		const head = el.createDiv({ cls: "pcon-about-head" });
+		head.createSpan({ cls: "pcon-about-name", text: this.plugin.manifest.name });
+		head.createSpan({ cls: "pcon-about-version", text: "v" + this.plugin.manifest.version });
+		el.createDiv({ cls: "pcon-about-desc", text: this.plugin.manifest.description });
+	}
+
+	/** The master switch: on and off, above the sections rather than inside one. */
+	private masterRow(): Row {
+		return {
+			name: "Sync",
+			cls: "pcon-master",
+			desc: this.plugin.subscriberOnly
+				? "This vault receives shares from other people. Nothing of your own is being synced, which is fine: set up sync only if you also want your own notes backed up and on your other devices."
+				: !this.plugin.remote.connected
+					? "Not set up yet on this device."
+					: this.plugin.paused
+						? "Off: nothing syncs on this device until this is turned back on. Other devices are unaffected."
+						: "On: this device syncs automatically while Obsidian is open.",
+			build: (st) => {
+				if (this.plugin.remote.connected) {
+					st.addToggle((t) => t.setValue(!this.plugin.paused).onChange((v) => this.plugin.setPaused(!v)));
+					return;
+				}
+				// a vault that only receives shares is already set up for what it
+				// does; the offer stays available but stops shouting
+				st.addButton((b) => {
+					b.setButtonText("Set up sync").onClick(() => new SetupWizard(this.app, this.plugin).open());
+					if (!this.plugin.subscriberOnly) b.setButtonText("Set up Power Connect").setCta();
+				});
+			},
+		};
+	}
+
+	/** The pre-1.13 renderer: every section on one page, with a tab bar and a
+	 *  search box of our own because there was no declarative API to hand the
+	 *  work to. Obsidian 1.13 and up ignores this and renders the definitions
+	 *  above instead, so the two only ever differ in how they draw, never in
+	 *  what they draw. */
 	display() {
+		this.renderFallback();
+	}
+
+	private renderFallback() {
 		const root = this.containerEl;
 		root.empty();
 		this.closeHelp();
-		const s = this.plugin.settings;
-		const save = () => this.plugin.queueSave();
-		this.plugin.refreshSettingsTab = () => this.display();
 
-		const TABS: { id: string; label: string }[] = [
-			{ id: "account", label: "Account" },
-			{ id: "sync", label: "Sync" },
-			{ id: "selection", label: "Selection" },
-			{ id: "shares", label: "Shares" },
-			{ id: "advanced", label: "Advanced" },
-		];
-		if (!TABS.some((t) => t.id === this.activeTab)) this.activeTab = TABS[0].id;
+		const pages = this.buildPages();
+		if (!pages.some((p) => p.id === this.activeTab)) this.activeTab = pages[0].id;
+
+		this.renderAbout(root.createDiv({ cls: "pcon-about-standalone" }));
 
 		const searchWrap = root.createDiv({ cls: "pcon-settings-search" });
 		const searchInput = searchWrap.createEl("input", { cls: "pcon-settings-search-input" });
@@ -4135,665 +4300,22 @@ class PconSettingTab extends PluginSettingTab {
 
 		// the master switch lives above the tabs: on/off should never require
 		// hunting through sections
-		const master = new Setting(root.createDiv({ cls: "pcon-master" }))
-			.setName("Sync")
-			.setDesc(
-				this.plugin.subscriberOnly
-					? "This vault receives shares from other people. Nothing of your own is being synced, which is fine: set up sync only if you also want your own notes backed up and on your other devices."
-					: !this.plugin.remote.connected
-						? "Not set up yet on this device."
-						: this.plugin.paused
-						? "Off: nothing syncs on this device until this is turned back on. Other devices are unaffected."
-						: "On: this device syncs automatically while Obsidian is open."
-			);
-		if (this.plugin.remote.connected) {
-			master.addToggle((t) => t.setValue(!this.plugin.paused).onChange((v) => this.plugin.setPaused(!v)));
-		} else {
-			// a vault that only receives shares is already set up for what it
-			// does; the offer stays available but stops shouting
-			master.addButton((b) => {
-				b.setButtonText("Set up sync").onClick(() => new SetupWizard(this.app, this.plugin).open());
-				if (!this.plugin.subscriberOnly) b.setButtonText("Set up Power Connect").setCta();
-			});
-		}
+		this.drawRow(root.createDiv(), this.masterRow());
 
 		const tabBar = root.createDiv({ cls: "pcon-settings-tabs" });
 		const body = root.createDiv({ cls: "pcon-settings-body" });
 
-		// Add new settings through section(), never a bare setHeading(), or
-		// they escape the tabs.
-		let c: HTMLElement = body;
-		const section = (name: string, tab: string) => {
-			c = body.createDiv({ cls: "pcon-settings-section" });
-			c.dataset.tab = tab;
-			c.dataset.name = name.toLowerCase();
-			return new Setting(c).setName(name).setHeading();
-		};
-		const intro = (text: string) => new Setting(c).setDesc(text).setClass("pcon-section-intro");
-		const help = (st: Setting, text: string) => {
-			const ic = st.nameEl.createSpan({ cls: "pcon-setting-help" });
-			setIcon(ic, "help-circle");
-			ic.addEventListener("mouseenter", () => this.openHelp(ic, text, false));
-			ic.addEventListener("mouseleave", () => {
-				if (!this.helpPinned && this.helpAnchor === ic) this.closeHelp();
-			});
-			ic.addEventListener("click", (e) => {
-				e.preventDefault();
-				e.stopPropagation();
-				if (this.helpPinned && this.helpAnchor === ic) this.closeHelp();
-				else this.openHelp(ic, text, true);
-			});
-		};
-
-		/* ---------------- Account ---------------- */
-
-		section("Storage", "account");
-		intro("Power Connect syncs this vault with a folder in your own cloud storage account. Nothing passes through any other server.");
-		if (!this.plugin.remote.connected) {
-			new Setting(c)
-				.setName("Not set up on this device")
-				.setDesc("Press Set up Power Connect above. The guided setup owns every choice here: provider, sign-in, folder, and encryption. These settings appear once the device is connected.");
-		} else {
-			const provSt = new Setting(c).setName("Provider");
-			provSt.controlEl.createSpan({ text: this.plugin.remote.name });
-			help(
-				provSt,
-				"Dropbox is the first supported provider. The sync engine is storage-agnostic behind one small interface, so more providers (Box, OneDrive, and friends) can be added without changing anything else here. A vault syncs through one provider at a time."
-			);
-		}
-
-		if (this.plugin.remote.connected) {
-			const connSt = new Setting(c).setName("Connection");
-			connSt.setDesc(this.plugin.accountLabel() ? `Connected as ${this.plugin.accountLabel()}.` : "Connected.");
-			connSt.addButton((b) =>
-				b
-					.setButtonText("Sign in again")
-					.setTooltip("A sign-in keeps the permissions it was granted. Re-authorize after changing your app's permissions, for example to add sharing.")
-					.onClick(() => new SetupWizard(this.app, this.plugin, "connect").open())
-			);
-			connSt.addButton((b) =>
-				b.setButtonText("Disconnect").onClick(async () => {
-					await this.plugin.remote.revoke();
-					this.plugin.clearProviderAuth();
-					save();
-					this.plugin.applySettings();
-					this.plugin.log("info", `Disconnected from ${this.plugin.remote.name}.`);
-					this.display();
-				})
-			);
-			const usage = connSt.descEl.createDiv({ cls: "pcon-muted" });
-			usage.setText("Reading space usage...");
-			this.plugin.remote
-				.spaceUsage()
-				.then((u) => {
-					usage.setText(`${fmtBytes(u.used)} of ${fmtBytes(u.allocated)} used in ${this.plugin.remote.name}.`);
-					const bar = usage.createDiv({ cls: "pcon-usage-bar" });
-					bar.createDiv({ cls: "pcon-usage-fill" }).style.width = `${Math.min(100, Math.round((u.used / Math.max(1, u.allocated)) * 100))}%`;
-				})
-				.catch(() => usage.setText(""));
-			help(
-				connSt,
-				"The one-time setup creates a Dropbox app under your account with App folder access, so Power Connect can only ever see its own folder, never the rest of your Dropbox. Sign-in uses a paste-a-code flow that works the same on desktop and phone. Each device connects once; tokens stay on the device."
-			);
-
-			const stats = this.plugin.engine.syncedStats();
-			const held = this.plugin.engine.heldBackCount();
-			const statSt = new Setting(c)
-				.setName("Synced")
-				.setDesc(
-					stats.files
-						? `${stats.files.toLocaleString()} file(s) in ${stats.folders.toLocaleString()} folder(s), ${fmtBytes(stats.bytes)}. Last synced ${this.plugin.lastSyncMs ? new Date(this.plugin.lastSyncMs).toLocaleString() : "never"}.` +
-								(held ? ` ${held.toLocaleString()} plugin settings file(s) held back until the passphrase is entered.` : "")
-						: "Nothing synced on this device yet; the numbers appear after the first sync."
-				);
-			help(
-				statSt,
-				"Counted from this device's sync journal: the files both sides agree on, the folders they live in, and their size before any encryption. Open settings again after a sync for fresh numbers."
-			);
-
-			const folderSt = new Setting(c)
-				.setName(`${this.plugin.remote.name} folder`)
-				.setDesc(s.provider === "dropbox" ? "The folder under Apps that holds this vault. Every device syncing this vault must use the same name." : "The folder holding this vault. Every device syncing this vault must use the same name.")
-				.addText((t) =>
-					t
-						.setPlaceholder(this.app.vault.getName())
-						.setValue(s.remoteFolder)
-						.onChange((v) => {
-							s.remoteFolder = v;
-							save();
-							this.plugin.applySettings();
-						})
-				);
-			help(
-				folderSt,
-				"Empty means the vault's own name. On a second device, set this to the same name the first device used and run Preview sync: identical files pair up with no transfer, and only real differences move. Changing it later points syncing at a different copy; use Reset sync state after changing it."
-			);
-			const protOn = this.plugin.engine.protectionSeen || !!this.plugin.engine.secretsKey;
-			const e2eSt = new Setting(c)
-				.setName("Encryption")
-				.setDesc(
-					s.e2eEnabled
-						? "On for this folder: everything uploads encrypted (AES-256-GCM); the passphrase is entered once per device."
-						: protOn
-							? this.plugin.engine.secretsKey || s.e2ePassphrase
-								? "Plugin settings files upload encrypted with the passphrase; notes upload as they are."
-								: "Plugin settings files are protected; enter the passphrase in setup to sync them on this device."
-							: "Off for this folder. Plugin settings files are held back until protected; choose a privacy level in setup."
-				)
-				.addButton((b) => b.setButtonText("Change in setup").onClick(() => new SetupWizard(this.app, this.plugin).open()));
-			help(
-				e2eSt,
-				"Three levels, chosen in the guided setup: everything encrypted (decided per folder while it is empty; changing it later means a fresh folder and one full re-upload), only plugin settings files protected (can be added to a folder that already holds files), or off. Either passphrase is entered once per device and never written to a synced file."
-			);
-
-			// selective folder encryption: available once there is a passphrase and
-			// the folder is not already fully encrypted (which covers everything)
-			if (!s.e2eEnabled) {
-				const protectedFolders = s.protectedFolders ?? [];
-				const foldSt = new Setting(c)
-					.setName("Encrypted folders")
-					.setDesc(
-						s.e2ePassphrase
-							? "Top-level folders that upload encrypted while the rest of the vault stays plain, sharing the one protection passphrase. Good for an Email folder or anything private. Files stay readable on this device; only the Dropbox copy is encrypted."
-							: "Set a passphrase in setup first, then protect individual top-level folders here."
-					);
-				if (s.e2ePassphrase) {
-					// add-a-folder row: a folder picker plus an explicit Protect
-					// button, so a folder name with spaces can be typed in full and
-					// several folders added one after another. Adding re-renders the
-					// list, so each new folder shows up with its own remove control.
-					let pending = "";
-					const addFolder = async (raw: string) => {
-						const top = raw.replace(/\\/g, "/").split("/")[0].trim();
-						if (!top) {
-							new Notice("Power Connect: pick a top-level folder to protect.", 6000);
-							return;
-						}
-						if ((s.protectedFolders ?? []).some((f) => f.toLowerCase() === top.toLowerCase())) {
-							new Notice(`Power Connect: "${top}" is already protected.`, 6000);
-							return;
-						}
-						new Notice(`Power Connect: protecting "${top}" (re-encrypting its files on Dropbox)…`, 6000);
-						const err = await this.plugin.setFolderProtection(top, true);
-						if (err) new Notice("Power Connect: " + err, 8000);
-						this.display();
-					};
-					foldSt.addText((t) => {
-						t.setPlaceholder("folder name (spaces are fine)");
-						const sug = new FolderSuggest(this.app, t.inputEl, (folder) => {
-							// a picked folder can be nested; protect its top-level parent
-							pending = folder.path.split("/")[0];
-							t.inputEl.value = pending;
-						});
-						sug.fillOnPick = true;
-						t.onChange((v) => (pending = v));
-						// Enter in the field protects what was typed, suggestion or not
-						t.inputEl.addEventListener("keydown", (e) => {
-							if (e.key === "Enter") {
-								e.preventDefault();
-								const v = pending || t.getValue();
-								t.setValue("");
-								pending = "";
-								void addFolder(v);
-							}
-						});
-					});
-					foldSt.addButton((b) =>
-						b
-							.setButtonText("Protect")
-							.setCta()
-							.onClick(() => {
-								const v = pending;
-								pending = "";
-								void addFolder(v);
-							})
-					);
-				}
-				help(
-					foldSt,
-					"Add as many folders as you like: pick or type a top-level folder (spaces and all) and click Protect, then repeat. Each protected folder is encrypted in transit and at rest on Dropbox but stays plaintext on this device, so search, Bases, and everything else keep working. Turning protection on re-uploads the folder's existing files as ciphertext; turning it off restores them to plaintext. One passphrase covers every protected folder and the plugin settings files."
-				);
-				for (const pf of protectedFolders) {
-					new Setting(c)
-						.setName(`🔒 ${pf}`)
-						.setDesc("Encrypted on Dropbox; plaintext on this device.")
-						.addExtraButton((b) =>
-							b
-								.setIcon("trash")
-								.setTooltip("Stop protecting (restores plaintext on Dropbox)")
-								.onClick(() =>
-									void this.plugin.setFolderProtection(pf, false).then((err) => {
-										if (err) new Notice("Power Connect: " + err, 8000);
-										else {
-											new Notice(`Power Connect: "${pf}" is no longer encrypted on Dropbox.`, 6000);
-											this.display();
-										}
-									})
-								)
-						);
-				}
+		// one section div per group, tagged with its tab so the tab bar and the
+		// search box below can show and hide whole sections at a time
+		for (const p of pages) {
+			for (const g of p.groups) {
+				const sec = body.createDiv({ cls: "pcon-settings-section" });
+				sec.dataset.tab = p.id;
+				sec.dataset.name = (g.heading ?? p.label).toLowerCase();
+				if (g.heading) new Setting(sec).setName(g.heading).setHeading();
+				for (const r of g.rows) this.drawRow(sec, r);
 			}
 		}
-
-		if (this.plugin.remote.connected) {
-			section("Other devices", "account");
-			intro("The same vault in Obsidian on another computer or phone stays in sync through this Dropbox folder. Each device installs Power Connect once; everything else arrives through sync.");
-			const addSt = new Setting(c)
-				.setName("Add another device")
-				.setDesc("Set up this vault in Obsidian on another computer or phone. A setup code fills that device's wizard.")
-				.addButton((b) =>
-					b
-						.setButtonText("Show the steps and setup code")
-						.setCta()
-						.onClick(() => new AddDeviceModal(this.app, this.plugin).open())
-				);
-			help(
-				addSt,
-				"Install the plugin on the other device, paste the setup code into its wizard, and authorize Dropbox there; the passphrase, if one is set, is entered on that device too. The first sync brings notes, settings, themes, and plugins, and afterwards updates flow by themselves."
-			);
-		}
-
-		/* ---------------- Sync ---------------- */
-
-		/* ---------------- Shares ---------------- */
-
-		section("Shares", "shares");
-		intro(
-			"Notes you share with other people, and notes they share with you. Everything is encrypted before it leaves this vault, and nobody can read a share until you approve them."
-		);
-
-		{
-			const shares = s.shares.length;
-			const waiting = s.shares.reduce((n, sh) => n + sh.members.filter((m) => m.state === "pending").length, 0);
-			const subs = s.subscriptions.length;
-			const pendingSubs = s.subscriptions.filter((x) => !x.key).length;
-
-			const sum = new Setting(c)
-				.setName(shares || subs ? `${shares} share(s) published, ${subs} received` : "Not sharing anything yet")
-				.setDesc(
-					waiting
-						? `${waiting} ${waiting === 1 ? "person is" : "people are"} waiting for you to approve or deny access.`
-						: pendingSubs
-							? `${pendingSubs} of your requests ${pendingSubs === 1 ? "is" : "are"} waiting to be approved by their owner.`
-							: "Right-click a folder or a note in the file list to share it, or paste an invite code someone sent you."
-				);
-			// the list itself lives in its own view: a settings tab has no
-			// search, no sort, and nowhere to put hundreds of rows
-			sum.addButton((b) =>
-				b
-					.setButtonText(waiting ? `Manage shares (${waiting})` : "Manage shares")
-					.setCta()
-					.onClick(() => {
-						void this.plugin.openSharesView();
-						(this.app as unknown as { setting?: { close: () => void } }).setting?.close();
-					})
-			);
-
-			new Setting(c)
-				.setName("Mark shared items in the file list")
-				.setDesc("Shows a small arrow and a colored edge beside shared folders and notes: outgoing, incoming, and waiting for approval.")
-				.addToggle((t) =>
-					t.setValue(s.shareMarks).onChange((v) => {
-						s.shareMarks = v;
-						save();
-						this.plugin.refreshShareMarks();
-					})
-				);
-
-			new Setting(c)
-				.setName("Receive a share")
-				.setDesc("Paste an invite code from whoever is sharing with you.")
-				.addButton((b) => b.setButtonText("Paste invite code").onClick(() => new ReceiveShareModal(this.app, this.plugin).open()));
-
-			if (!this.plugin.canPublish) {
-				new Setting(c)
-					.setName(this.plugin.settings.provider === "dropbox" ? "Connect Dropbox to publish shares" : "Publishing needs Dropbox for now")
-					.setDesc("Receiving shares from other people works without any of this, on any setup, including none at all.");
-			}
-		}
-
-		section("When to sync", "sync");
-		intro("Sync runs while Obsidian is open: shortly after launch, on a schedule, and after edits settle. On iPhone and iPad the app must be open; iOS does not run plugins in the background.");
-		new Setting(c).setName("Sync on start").setDesc("Run a sync a few seconds after Obsidian opens.").addToggle((t) =>
-			t.setValue(s.syncOnStart).onChange((v) => {
-				s.syncOnStart = v;
-				save();
-			})
-		);
-		const resumeSt = new Setting(c)
-			.setName("Sync when returning to Obsidian")
-			.setDesc("Catch up moments after the app comes back into view.")
-			.addToggle((t) =>
-				t.setValue(s.syncOnResume).onChange((v) => {
-					s.syncOnResume = v;
-					save();
-				})
-			);
-		help(
-			resumeSt,
-			"This is the trigger that matters on iPhone and iPad: iOS freezes plugins in the background, so the moment you reopen Obsidian is when catching up is possible. It also fires when you switch back to Obsidian on desktop. Skipped when a sync ran in the last few seconds."
-		);
-		const liveSt = new Setting(c)
-			.setName("Live sync (desktop)")
-			.setDesc("Pick up other devices' changes within seconds instead of on the schedule.")
-			.addToggle((t) =>
-				t.setValue(s.liveSync).onChange((v) => {
-					s.liveSync = v;
-					save();
-					this.plugin.applySettings();
-				})
-			);
-		help(
-			liveSt,
-			"Holds Dropbox's change-notification endpoint open in the background (one idle HTTPS request, no polling). When any device uploads, this one hears about it within seconds and runs a delta sync. Desktop only: phones cannot keep the connection open in the background. The interval schedule stays as the safety net."
-		);
-		new Setting(c)
-			.setName("Sync every")
-			.setDesc("A steady background rhythm while Obsidian is open.")
-			.addDropdown((d) => {
-				const opts: [string, string][] = [
-					["0", "Off"],
-					["1", "1 minute"],
-					["2", "2 minutes"],
-					["5", "5 minutes"],
-					["10", "10 minutes"],
-					["15", "15 minutes"],
-					["30", "30 minutes"],
-					["60", "60 minutes"],
-				];
-				for (const [v, l] of opts) d.addOption(v, l);
-				d.setValue(String(s.autoMinutes)).onChange((v) => {
-					s.autoMinutes = Number(v);
-					save();
-					this.plugin.scheduleAuto();
-				});
-			});
-		const watchSt = new Setting(c)
-			.setName("Sync after edits settle")
-			.setDesc("Wait this long after the last change, then sync.")
-			.addDropdown((d) => {
-				const opts: [string, string][] = [
-					["0", "Off"],
-					["10", "10 seconds"],
-					["30", "30 seconds"],
-					["60", "1 minute"],
-					["120", "2 minutes"],
-					["300", "5 minutes"],
-				];
-				for (const [v, l] of opts) d.addOption(v, l);
-				d.setValue(String(s.watchSeconds)).onChange((v) => {
-					s.watchSeconds = Number(v);
-					save();
-				});
-			});
-		help(watchSt, "Each edit restarts the countdown, so a writing session becomes one sync at the end instead of one per keystroke. Offline edits are safe regardless: the next successful sync always carries everything that changed since the last one.");
-		new Setting(c)
-			.setName("Notices")
-			.setDesc("How chatty sync results are.")
-			.addDropdown((d) => {
-				d.addOption("errors", "Errors only");
-				d.addOption("changes", "When something changed");
-				d.addOption("all", "Every sync");
-				d.setValue(s.notices).onChange((v) => {
-					s.notices = v as PconSettings["notices"];
-					save();
-				});
-			});
-
-		section("Conflicts and safety", "sync");
-		const confSt = new Setting(c)
-			.setName("When both sides changed")
-			.setDesc("The same file edited on two devices between syncs.")
-			.addDropdown((d) => {
-				d.addOption("both", "Keep both copies");
-				d.addOption("local", "Prefer this device");
-				d.addOption("remote", "Prefer Dropbox");
-				d.addOption("ask", "Ask each time");
-				d.setValue(s.conflictPolicy).onChange((v) => {
-					s.conflictPolicy = v as PconSettings["conflictPolicy"];
-					save();
-				});
-			});
-		help(
-			confSt,
-			"Keep both is the safe default: the newer edit keeps the file's name, the older lands beside it as 'Name (sync conflict ...)', and no words are ever lost. Identical edits are detected by content and never conflict. Ask only applies to syncs you start by hand; background syncs keep both rather than interrupting."
-		);
-		const mergeSt = new Setting(c)
-			.setName("Merge concurrent edits")
-			.setDesc("When the same note changed on two devices in different places, combine both edits into one file.")
-			.addToggle((t) =>
-				t.setValue(s.autoMerge).onChange((v) => {
-					s.autoMerge = v;
-					save();
-				})
-			);
-		help(
-			mergeSt,
-			"A three-way merge against the revision both edits started from: changes to different lines both land, identical changes land once, and additions at the same spot go in edit order, so every device produces the same file. Edits that collide on the same lines still keep both copies, and non-text files never merge. Applies with the Keep both and Ask policies."
-		);
-		const guardSt = new Setting(c)
-			.setName("Delete guard")
-			.setDesc("Pause when one sync would delete more than this share of the vault.")
-			.addSlider((sl) =>
-				sl
-					.setLimits(5, 100, 5)
-					.setValue(s.deleteGuardPct)
-					.setDynamicTooltip()
-					.onChange((v) => {
-						s.deleteGuardPct = v;
-						save();
-					})
-			);
-		help(
-			guardSt,
-			"If the Dropbox folder is emptied, or a scan goes wrong, a naive sync would mirror that destruction. Past this threshold (and always more than 10 files), Power Connect holds the deletions: a manual sync shows them for review, a background sync completes everything else and leaves the deletions for you. Local deletions also always go to the trash, and Dropbox keeps 30 days of history."
-		);
-
-		/* ---------------- Selection ---------------- */
-
-		section("What syncs", "selection");
-		intro("Everything in the vault syncs unless excluded here. Sign-in tokens, the passphrase, and the sync journal never sync; they live in per-device storage.");
-		const exSt = new Setting(c).setName("Exclude patterns").setDesc("One per line, gitignore style.").setClass("pcon-excludes");
-		exSt.addTextArea((t) => {
-			t.setPlaceholder("Private/\n*.mp4\n/Big Attachments/\n!Private/share.md")
-				.setValue(s.excludes)
-				.onChange((v) => {
-					s.excludes = v;
-					save();
-					this.plugin.applySettings();
-				});
-			t.inputEl.rows = 6;
-		});
-		help(
-			exSt,
-			"Patterns match anywhere unless they contain a slash; a leading slash anchors to the vault root, a trailing slash means a folder, * matches within a name, ** crosses folders, and ! re-includes. Examples: 'Private/' skips that folder anywhere, '/Templates/' only at the root, '*.pdf' skips PDFs everywhere. Newly excluded files are left alone everywhere, never deleted."
-		);
-		const devExSt = new Setting(c)
-			.setName("Exclude patterns, this device only")
-			.setDesc("Same syntax; applies only here and never syncs anywhere.")
-			.setClass("pcon-excludes");
-		devExSt.addTextArea((t) => {
-			t.setPlaceholder("Attachments/\n*.mp3")
-				.setValue(this.plugin.deviceExcludes)
-				.onChange((v) => this.plugin.saveDeviceExcludes(v));
-			t.inputEl.rows = 3;
-		});
-		help(
-			devExSt,
-			"For keeping a lean phone against a full desktop: exclude heavy folders here on the phone and every other device still syncs them. These rules live in this device's local storage, outside every synced file, so nothing that syncs settings between devices can carry them along."
-		);
-		let exTarget: "shared" | "device" = "shared";
-		new Setting(c)
-			.setName("Exclude a folder")
-			.setDesc("Pick a folder and its pattern is written into the chosen list for you.")
-			.addDropdown((d) =>
-				d
-					.addOption("shared", "Every device")
-					.addOption("device", "This device only")
-					.setValue(exTarget)
-					.onChange((v) => (exTarget = v as "shared" | "device"))
-			)
-			.addText((t) => {
-				t.setPlaceholder("start typing a folder name");
-				new FolderSuggest(this.app, t.inputEl, (folder) => {
-					const line = `${folder.path}/`;
-					if (exTarget === "device") this.plugin.saveDeviceExcludes(this.plugin.deviceExcludes ? `${this.plugin.deviceExcludes}\n${line}` : line);
-					else {
-						s.excludes = s.excludes ? `${s.excludes}\n${line}` : line;
-						save();
-						this.plugin.applySettings();
-					}
-					this.display();
-				});
-			});
-		new Setting(c).setName("File types on this device").setDesc("Sugar over the device-only patterns above: turning a type off writes its extension patterns there.").setHeading();
-		for (const g of TYPE_GROUPS) {
-			const lines = () => this.plugin.deviceExcludes.split(/\r?\n/).map((l) => l.trim());
-			const allOff = () => g.exts.every((e) => lines().includes(`*.${e}`));
-			new Setting(c)
-				.setName(g.name)
-				.setDesc(g.exts.map((e) => `.${e}`).join(", "))
-				.addToggle((t) =>
-					t.setValue(!allOff()).onChange((on) => {
-						let next = lines().filter((l) => !g.exts.includes(l.replace(/^\*\./, "")));
-						if (!on) next = [...next, ...g.exts.map((e) => `*.${e}`)];
-						this.plugin.saveDeviceExcludes(next.filter(Boolean).join("\n"));
-						this.display();
-					})
-				);
-		}
-		const sizeSt = new Setting(c)
-			.setName("Skip files larger than")
-			.setDesc("Big files stay where they are, in both directions.")
-			.addDropdown((d) => {
-				const opts: [string, string][] = [
-					["0", "No limit"],
-					["5", "5 MB"],
-					["10", "10 MB"],
-					["25", "25 MB"],
-					["50", "50 MB"],
-					["100", "100 MB"],
-					["250", "250 MB"],
-				];
-				for (const [v, l] of opts) d.addOption(v, l);
-				d.setValue(String(s.maxFileMB)).onChange((v) => {
-					s.maxFileMB = Number(v);
-					save();
-				});
-			});
-		help(
-			sizeSt,
-			"Over the cap, a file neither uploads from this device nor downloads to it; the sync log records each skip. Files that already synced are never deleted by lowering the cap, and raising it brings the bigger files back into play on the next sync."
-		);
-		const cfgSt = new Setting(c)
-			.setName("Sync Obsidian settings (.obsidian)")
-			.setDesc("Themes, snippets, app settings, plugin list, and plugin code.")
-			.addToggle((t) =>
-				t.setValue(s.syncConfig).onChange((v) => {
-					s.syncConfig = v;
-					save();
-					this.plugin.applySettings();
-					this.display();
-				})
-			);
-		help(
-			cfgSt,
-			"Workspace layout files stay excluded (each device keeps its own open tabs). Plugin settings files (data.json) are excluded by default because plugins routinely keep API keys in them; the toggle below opts them in. Power Connect itself travels like any other plugin, so an update here reaches your other devices; its journal never syncs, and its own settings file always does (it holds no credentials)."
-		);
-		if (s.syncConfig) {
-			const pdSt = new Setting(c)
-				.setName("Include plugin settings files")
-				.setDesc(
-					"Sync every plugin's data.json too. They routinely hold API keys, so they travel only under encryption: a fully encrypted folder, or plugin settings protection chosen in the guided setup. Without either, they are held back and the sync log says so."
-				)
-				.addToggle((t) =>
-					t.setValue(s.syncPluginData).onChange((v) => {
-						s.syncPluginData = v;
-						save();
-						this.plugin.applySettings();
-					})
-				);
-			help(
-				pdSt,
-				"Consider end-to-end encryption if you turn this on: with it, Dropbox stores only ciphertext, so keys inside plugin settings stay private. Power Connect's own data.json is always excluded regardless, since it holds your Dropbox tokens."
-			);
-		}
-
-		/* ---------------- Advanced ---------------- */
-
-		section("Run", "advanced");
-		new Setting(c)
-			.setName("Sync")
-			.setDesc("Run one now, or preview what the next sync would do without touching anything.")
-			.addButton((b) => b.setButtonText("Preview sync").onClick(() => void this.plugin.previewSync()))
-			.addButton((b) =>
-				b
-					.setButtonText("Sync now")
-					.setCta()
-					.onClick(() => void this.plugin.syncNow("settings", true))
-			);
-		new Setting(c).setName("Sync log").setDesc("What happened, file by file, this session.").addButton((b) => b.setButtonText("Show log").onClick(() => new LogModal(this.app, this.plugin).open()));
-
-		section("Tuning", "advanced");
-		new Setting(c)
-			.setName("Parallel transfers")
-			.setDesc("How many files move at once. Uploads stage without Dropbox's write lock and commit in batches, so higher values genuinely help on a big first sync.")
-			.addDropdown((d) => {
-				for (const n of [1, 2, 3, 4, 6, 8, 12]) d.addOption(String(n), String(n));
-				d.setValue(String(s.concurrency)).onChange((v) => {
-					s.concurrency = Number(v);
-					save();
-				});
-			});
-		new Setting(c).setName("Verbose log").setDesc("Include debug detail in the sync log.").addToggle((t) =>
-			t.setValue(s.verboseLog).onChange((v) => {
-				s.verboseLog = v;
-				save();
-			})
-		);
-
-		section("Recovery", "advanced");
-		const rescanSt = new Setting(c)
-			.setName("Full rescan")
-			.setDesc("Re-check every file's content against the journal on the next sync.")
-			.addButton((b) =>
-				b.setButtonText("Rescan and sync").onClick(() => {
-					(this.app as unknown as { commands: { executeCommandById: (id: string) => void } }).commands.executeCommandById("powerconnect:rescan");
-				})
-			);
-		help(rescanSt, "The normal scan trusts unchanged size and modification time. A full rescan rehashes everything and relists Dropbox, which catches edits that kept the same timestamp. Slower, never destructive.");
-		const resetSt = new Setting(c)
-			.setName("Reset sync state")
-			.setDesc("Forget the sync journal on this device. The next sync re-merges both sides from scratch.")
-			.addButton((b) =>
-				b
-					.setButtonText("Reset")
-					.setWarning()
-					.onClick(() =>
-						new ConfirmModal(
-							this.app,
-							"Reset sync state?",
-							"The journal on this device is forgotten. Nothing is deleted anywhere: the next sync pairs identical files by content and keeps both versions of any file that differs (as conflict copies). Use this after changing the Dropbox folder name, or if sync seems wedged.",
-							"Reset",
-							() => void this.plugin.resetState()
-						).open()
-					)
-			);
-
-		const nameSt = new Setting(c)
-			.setName("Device name")
-			.setDesc("How this device is called in logs and status. Stays on this device.")
-			.addText((t) =>
-				t.setPlaceholder("for example: Steve's Desktop")
-					.setValue((this.app.loadLocalStorage("pcon-device-name") as string | null) ?? "")
-					.onChange((v) => this.app.saveLocalStorage("pcon-device-name", v.trim() || null))
-			);
-		help(nameSt, "Per-device, like the journal and sign-in: it never syncs, so every device can have its own.");
-
-		section("About", "advanced");
-		new Setting(c).setName(`Power Connect ${this.plugin.manifest.version}`).setDesc(`Build ${PCON_BUILD}. Last synced ${this.plugin.lastSyncMs ? new Date(this.plugin.lastSyncMs).toLocaleString() : "never"}.`);
-
-		/* ---------------- tab bar, search ---------------- */
 
 		const setVisible = (el: HTMLElement, v: boolean) => (el.style.display = v ? "" : "none");
 		const applyView = () => {
@@ -4811,7 +4333,7 @@ class PconSettingTab extends PluginSettingTab {
 				for (const it of items) {
 					const name = it.querySelector(".setting-item-name")?.textContent?.toLowerCase() ?? "";
 					const desc = it.querySelector(".setting-item-description")?.textContent?.toLowerCase() ?? "";
-					const hit = nameHit || name.includes(q) || desc.includes(q);
+					const hit = nameHit || name.includes(q) || desc.includes(q) || (it.dataset.pconAlias ?? "").includes(q);
 					setVisible(it, hit);
 					if (hit) anyHit = true;
 				}
@@ -4819,12 +4341,12 @@ class PconSettingTab extends PluginSettingTab {
 			}
 		};
 
-		for (const t of TABS) {
-			const btn = tabBar.createEl("button", { text: t.label, cls: "pcon-settings-tab" });
-			btn.toggleClass("is-active", t.id === this.activeTab);
+		for (const p of pages) {
+			const btn = tabBar.createEl("button", { text: p.label, cls: "pcon-settings-tab" });
+			btn.toggleClass("is-active", p.id === this.activeTab);
 			btn.onclick = () => {
-				if (this.activeTab === t.id) return;
-				this.activeTab = t.id;
+				if (this.activeTab === p.id) return;
+				this.activeTab = p.id;
 				for (const other of Array.from(tabBar.children) as HTMLElement[]) other.toggleClass("is-active", other === btn);
 				applyView();
 			};
@@ -4836,5 +4358,736 @@ class PconSettingTab extends PluginSettingTab {
 		});
 
 		applyView();
+	}
+
+	/** One row into a container, in the order Obsidian applies a definition:
+	 *  name and description first, then the row's own content, so a row that
+	 *  appends to either element lands in the same place under both renderers. */
+	private drawRow(into: HTMLElement, r: Row) {
+		const st = new Setting(into).setName(r.name);
+		if (r.desc) st.setDesc(r.desc);
+		if (r.cls) st.settingEl.addClass(r.cls);
+		if (r.aliases?.length) st.settingEl.dataset.pconAlias = r.aliases.join(" ").toLowerCase();
+		r.build?.(st);
+		if (r.help) this.addHelp(st, r.help);
+	}
+
+	/** Every row of the settings tab, in order, as plain data: the one source
+	 *  both renderers draw from, so they cannot drift apart. Built fresh on each
+	 *  render because most of this tab reflects live sync state. */
+	private buildPages(): Page[] {
+		const s = this.plugin.settings;
+		const save = () => this.plugin.queueSave();
+		const intro = (text: string): Row => ({ name: "", desc: text, cls: "pcon-section-intro" });
+
+		/* ---------------- Account ---------------- */
+
+		const storage: Row[] = [
+			intro("Power Connect syncs this vault with a folder in your own cloud storage account. Nothing passes through any other server."),
+		];
+		if (!this.plugin.remote.connected) {
+			storage.push({
+				name: "Not set up on this device",
+				desc: "Press Set up Power Connect above. The guided setup owns every choice here: provider, sign-in, folder, and encryption. These settings appear once the device is connected.",
+			});
+		} else {
+			storage.push({
+				name: "Provider",
+				help: "Dropbox is the first supported provider. The sync engine is storage-agnostic behind one small interface, so more providers (Box, OneDrive, and friends) can be added without changing anything else here. A vault syncs through one provider at a time.",
+				build: (st) => {
+					st.controlEl.createSpan({ text: this.plugin.remote.name });
+				},
+			});
+			storage.push({
+				name: "Connection",
+				desc: this.plugin.accountLabel() ? `Connected as ${this.plugin.accountLabel()}.` : "Connected.",
+				help: "The one-time setup creates a Dropbox app under your account with App folder access, so Power Connect can only ever see its own folder, never the rest of your Dropbox. Sign-in uses a paste-a-code flow that works the same on desktop and phone. Each device connects once; tokens stay on the device.",
+				build: (st) => {
+					st.addButton((b) =>
+						b
+							.setButtonText("Sign in again")
+							.setTooltip("A sign-in keeps the permissions it was granted. Re-authorize after changing your app's permissions, for example to add sharing.")
+							.onClick(() => new SetupWizard(this.app, this.plugin, "connect").open())
+					);
+					st.addButton((b) =>
+						b.setButtonText("Disconnect").onClick(async () => {
+							await this.plugin.remote.revoke();
+							this.plugin.clearProviderAuth();
+							save();
+							this.plugin.applySettings();
+							this.plugin.log("info", `Disconnected from ${this.plugin.remote.name}.`);
+							this.refresh();
+						})
+					);
+					const usage = st.descEl.createDiv({ cls: "pcon-muted" });
+					usage.setText("Reading space usage...");
+					this.plugin.remote
+						.spaceUsage()
+						.then((u) => {
+							usage.setText(`${fmtBytes(u.used)} of ${fmtBytes(u.allocated)} used in ${this.plugin.remote.name}.`);
+							const bar = usage.createDiv({ cls: "pcon-usage-bar" });
+							bar.createDiv({ cls: "pcon-usage-fill" }).style.width = `${Math.min(100, Math.round((u.used / Math.max(1, u.allocated)) * 100))}%`;
+						})
+						.catch(() => usage.setText(""));
+				},
+			});
+
+			const stats = this.plugin.engine.syncedStats();
+			const held = this.plugin.engine.heldBackCount();
+			storage.push({
+				name: "Synced",
+				desc: stats.files
+					? `${stats.files.toLocaleString()} file(s) in ${stats.folders.toLocaleString()} folder(s), ${fmtBytes(stats.bytes)}. Last synced ${this.plugin.lastSyncMs ? new Date(this.plugin.lastSyncMs).toLocaleString() : "never"}.` +
+						(held ? ` ${held.toLocaleString()} plugin settings file(s) held back until the passphrase is entered.` : "")
+					: "Nothing synced on this device yet; the numbers appear after the first sync.",
+				help: "Counted from this device's sync journal: the files both sides agree on, the folders they live in, and their size before any encryption. Open settings again after a sync for fresh numbers.",
+			});
+
+			storage.push({
+				name: `${this.plugin.remote.name} folder`,
+				desc:
+					s.provider === "dropbox"
+						? "The folder under Apps that holds this vault. Every device syncing this vault must use the same name."
+						: "The folder holding this vault. Every device syncing this vault must use the same name.",
+				help: "Empty means the vault's own name. On a second device, set this to the same name the first device used and run Preview sync: identical files pair up with no transfer, and only real differences move. Changing it later points syncing at a different copy; use Reset sync state after changing it.",
+				build: (st) => {
+					st.addText((t) =>
+						t
+							.setPlaceholder(this.app.vault.getName())
+							.setValue(s.remoteFolder)
+							.onChange((v) => {
+								s.remoteFolder = v;
+								save();
+								this.plugin.applySettings();
+							})
+					);
+				},
+			});
+
+			const protOn = this.plugin.engine.protectionSeen || !!this.plugin.engine.secretsKey;
+			storage.push({
+				name: "Encryption",
+				desc: s.e2eEnabled
+					? "On for this folder: everything uploads encrypted (AES-256-GCM); the passphrase is entered once per device."
+					: protOn
+						? this.plugin.engine.secretsKey || s.e2ePassphrase
+							? "Plugin settings files upload encrypted with the passphrase; notes upload as they are."
+							: "Plugin settings files are protected; enter the passphrase in setup to sync them on this device."
+						: "Off for this folder. Plugin settings files are held back until protected; choose a privacy level in setup.",
+				help: "Three levels, chosen in the guided setup: everything encrypted (decided per folder while it is empty; changing it later means a fresh folder and one full re-upload), only plugin settings files protected (can be added to a folder that already holds files), or off. Either passphrase is entered once per device and never written to a synced file.",
+				build: (st) => {
+					st.addButton((b) => b.setButtonText("Change in setup").onClick(() => new SetupWizard(this.app, this.plugin).open()));
+				},
+			});
+
+			// selective folder encryption: available once there is a passphrase and
+			// the folder is not already fully encrypted (which covers everything)
+			if (!s.e2eEnabled) {
+				const protectedFolders = s.protectedFolders ?? [];
+				storage.push({
+					name: "Encrypted folders",
+					desc: s.e2ePassphrase
+						? "Top-level folders that upload encrypted while the rest of the vault stays plain, sharing the one protection passphrase. Good for an Email folder or anything private. Files stay readable on this device; only the Dropbox copy is encrypted."
+						: "Set a passphrase in setup first, then protect individual top-level folders here.",
+					help: "Add as many folders as you like: pick or type a top-level folder (spaces and all) and click Protect, then repeat. Each protected folder is encrypted in transit and at rest on Dropbox but stays plaintext on this device, so search, Bases, and everything else keep working. Turning protection on re-uploads the folder's existing files as ciphertext; turning it off restores them to plaintext. One passphrase covers every protected folder and the plugin settings files.",
+					build: (st) => {
+						if (!s.e2ePassphrase) return;
+						// add-a-folder row: a folder picker plus an explicit Protect
+						// button, so a folder name with spaces can be typed in full and
+						// several folders added one after another. Adding re-renders the
+						// list, so each new folder shows up with its own remove control.
+						let pending = "";
+						const addFolder = async (raw: string) => {
+							const top = raw.replace(/\\/g, "/").split("/")[0].trim();
+							if (!top) {
+								new Notice("Power Connect: pick a top-level folder to protect.", 6000);
+								return;
+							}
+							if ((s.protectedFolders ?? []).some((f) => f.toLowerCase() === top.toLowerCase())) {
+								new Notice(`Power Connect: "${top}" is already protected.`, 6000);
+								return;
+							}
+							new Notice(`Power Connect: protecting "${top}" (re-encrypting its files on Dropbox)…`, 6000);
+							const err = await this.plugin.setFolderProtection(top, true);
+							if (err) new Notice("Power Connect: " + err, 8000);
+							this.refresh();
+						};
+						st.addText((t) => {
+							t.setPlaceholder("folder name (spaces are fine)");
+							const sug = new FolderSuggest(this.app, t.inputEl, (folder) => {
+								// a picked folder can be nested; protect its top-level parent
+								pending = folder.path.split("/")[0];
+								t.inputEl.value = pending;
+							});
+							sug.fillOnPick = true;
+							t.onChange((v) => (pending = v));
+							// Enter in the field protects what was typed, suggestion or not
+							t.inputEl.addEventListener("keydown", (e) => {
+								if (e.key === "Enter") {
+									e.preventDefault();
+									const v = pending || t.getValue();
+									t.setValue("");
+									pending = "";
+									void addFolder(v);
+								}
+							});
+						});
+						st.addButton((b) =>
+							b
+								.setButtonText("Protect")
+								.setCta()
+								.onClick(() => {
+									const v = pending;
+									pending = "";
+									void addFolder(v);
+								})
+						);
+					},
+				});
+				for (const pf of protectedFolders) {
+					storage.push({
+						name: `🔒 ${pf}`,
+						desc: "Encrypted on Dropbox; plaintext on this device.",
+						build: (st) => {
+							st.addExtraButton((b) =>
+								b
+									.setIcon("trash")
+									.setTooltip("Stop protecting (restores plaintext on Dropbox)")
+									.onClick(() =>
+										void this.plugin.setFolderProtection(pf, false).then((err) => {
+											if (err) new Notice("Power Connect: " + err, 8000);
+											else {
+												new Notice(`Power Connect: "${pf}" is no longer encrypted on Dropbox.`, 6000);
+												this.refresh();
+											}
+										})
+									)
+							);
+						},
+					});
+				}
+			}
+		}
+
+		const accountGroups: Group[] = [{ heading: "Storage", rows: storage }];
+		if (this.plugin.remote.connected) {
+			accountGroups.push({
+				heading: "Other devices",
+				rows: [
+					intro("The same vault in Obsidian on another computer or phone stays in sync through this Dropbox folder. Each device installs Power Connect once; everything else arrives through sync."),
+					{
+						name: "Add another device",
+						desc: "Set up this vault in Obsidian on another computer or phone. A setup code fills that device's wizard.",
+						help: "Install the plugin on the other device, paste the setup code into its wizard, and authorize Dropbox there; the passphrase, if one is set, is entered on that device too. The first sync brings notes, settings, themes, and plugins, and afterwards updates flow by themselves.",
+						build: (st) => {
+							st.addButton((b) =>
+								b
+									.setButtonText("Show the steps and setup code")
+									.setCta()
+									.onClick(() => new AddDeviceModal(this.app, this.plugin).open())
+							);
+						},
+					},
+				],
+			});
+		}
+
+		/* ---------------- Shares ---------------- */
+
+		const shares = s.shares.length;
+		const waiting = s.shares.reduce((n, sh) => n + sh.members.filter((m) => m.state === "pending").length, 0);
+		const subs = s.subscriptions.length;
+		const pendingSubs = s.subscriptions.filter((x) => !x.key).length;
+		const shareRows: Row[] = [
+			intro("Notes you share with other people, and notes they share with you. Everything is encrypted before it leaves this vault, and nobody can read a share until you approve them."),
+			{
+				name: shares || subs ? `${shares} share(s) published, ${subs} received` : "Not sharing anything yet",
+				desc: waiting
+					? `${waiting} ${waiting === 1 ? "person is" : "people are"} waiting for you to approve or deny access.`
+					: pendingSubs
+						? `${pendingSubs} of your requests ${pendingSubs === 1 ? "is" : "are"} waiting to be approved by their owner.`
+						: "Right-click a folder or a note in the file list to share it, or paste an invite code someone sent you.",
+				build: (st) => {
+					// the list itself lives in its own view: a settings tab has no
+					// search, no sort, and nowhere to put hundreds of rows
+					st.addButton((b) =>
+						b
+							.setButtonText(waiting ? `Manage shares (${waiting})` : "Manage shares")
+							.setCta()
+							.onClick(() => {
+								void this.plugin.openSharesView();
+								(this.app as unknown as { setting?: { close: () => void } }).setting?.close();
+							})
+					);
+				},
+			},
+			{
+				name: "Mark shared items in the file list",
+				desc: "Shows a small arrow and a colored edge beside shared folders and notes: outgoing, incoming, and waiting for approval.",
+				build: (st) => {
+					st.addToggle((t) =>
+						t.setValue(s.shareMarks).onChange((v) => {
+							s.shareMarks = v;
+							save();
+							this.plugin.refreshShareMarks();
+						})
+					);
+				},
+			},
+			{
+				name: "Receive a share",
+				desc: "Paste an invite code from whoever is sharing with you.",
+				build: (st) => {
+					st.addButton((b) => b.setButtonText("Paste invite code").onClick(() => new ReceiveShareModal(this.app, this.plugin).open()));
+				},
+			},
+		];
+		if (!this.plugin.canPublish) {
+			shareRows.push({
+				name: s.provider === "dropbox" ? "Connect Dropbox to publish shares" : "Publishing needs Dropbox for now",
+				desc: "Receiving shares from other people works without any of this, on any setup, including none at all.",
+			});
+		}
+
+		/* ---------------- Sync ---------------- */
+
+		const whenToSync: Row[] = [
+			intro("Sync runs while Obsidian is open: shortly after launch, on a schedule, and after edits settle. On iPhone and iPad the app must be open; iOS does not run plugins in the background."),
+			{
+				name: "Sync on start",
+				desc: "Run a sync a few seconds after Obsidian opens.",
+				build: (st) => {
+					st.addToggle((t) =>
+						t.setValue(s.syncOnStart).onChange((v) => {
+							s.syncOnStart = v;
+							save();
+						})
+					);
+				},
+			},
+			{
+				name: "Sync when returning to Obsidian",
+				desc: "Catch up moments after the app comes back into view.",
+				help: "This is the trigger that matters on iPhone and iPad: iOS freezes plugins in the background, so the moment you reopen Obsidian is when catching up is possible. It also fires when you switch back to Obsidian on desktop. Skipped when a sync ran in the last few seconds.",
+				build: (st) => {
+					st.addToggle((t) =>
+						t.setValue(s.syncOnResume).onChange((v) => {
+							s.syncOnResume = v;
+							save();
+						})
+					);
+				},
+			},
+			{
+				name: "Live sync (desktop)",
+				desc: "Pick up other devices' changes within seconds instead of on the schedule.",
+				help: "Holds Dropbox's change-notification endpoint open in the background (one idle HTTPS request, no polling). When any device uploads, this one hears about it within seconds and runs a delta sync. Desktop only: phones cannot keep the connection open in the background. The interval schedule stays as the safety net.",
+				build: (st) => {
+					st.addToggle((t) =>
+						t.setValue(s.liveSync).onChange((v) => {
+							s.liveSync = v;
+							save();
+							this.plugin.applySettings();
+						})
+					);
+				},
+			},
+			{
+				name: "Sync every",
+				desc: "A steady background rhythm while Obsidian is open.",
+				build: (st) => {
+					st.addDropdown((d) => {
+						const opts: [string, string][] = [
+							["0", "Off"],
+							["1", "1 minute"],
+							["2", "2 minutes"],
+							["5", "5 minutes"],
+							["10", "10 minutes"],
+							["15", "15 minutes"],
+							["30", "30 minutes"],
+							["60", "60 minutes"],
+						];
+						for (const [v, l] of opts) d.addOption(v, l);
+						d.setValue(String(s.autoMinutes)).onChange((v) => {
+							s.autoMinutes = Number(v);
+							save();
+							this.plugin.scheduleAuto();
+						});
+					});
+				},
+			},
+			{
+				name: "Sync after edits settle",
+				desc: "Wait this long after the last change, then sync.",
+				help: "Each edit restarts the countdown, so a writing session becomes one sync at the end instead of one per keystroke. Offline edits are safe regardless: the next successful sync always carries everything that changed since the last one.",
+				build: (st) => {
+					st.addDropdown((d) => {
+						const opts: [string, string][] = [
+							["0", "Off"],
+							["10", "10 seconds"],
+							["30", "30 seconds"],
+							["60", "1 minute"],
+							["120", "2 minutes"],
+							["300", "5 minutes"],
+						];
+						for (const [v, l] of opts) d.addOption(v, l);
+						d.setValue(String(s.watchSeconds)).onChange((v) => {
+							s.watchSeconds = Number(v);
+							save();
+						});
+					});
+				},
+			},
+			{
+				name: "Notices",
+				desc: "How chatty sync results are.",
+				build: (st) => {
+					st.addDropdown((d) => {
+						d.addOption("errors", "Errors only");
+						d.addOption("changes", "When something changed");
+						d.addOption("all", "Every sync");
+						d.setValue(s.notices).onChange((v) => {
+							s.notices = v as PconSettings["notices"];
+							save();
+						});
+					});
+				},
+			},
+		];
+
+		const conflicts: Row[] = [
+			{
+				name: "When both sides changed",
+				desc: "The same file edited on two devices between syncs.",
+				help: "Keep both is the safe default: the newer edit keeps the file's name, the older lands beside it as 'Name (sync conflict ...)', and no words are ever lost. Identical edits are detected by content and never conflict. Ask only applies to syncs you start by hand; background syncs keep both rather than interrupting.",
+				build: (st) => {
+					st.addDropdown((d) => {
+						d.addOption("both", "Keep both copies");
+						d.addOption("local", "Prefer this device");
+						d.addOption("remote", "Prefer Dropbox");
+						d.addOption("ask", "Ask each time");
+						d.setValue(s.conflictPolicy).onChange((v) => {
+							s.conflictPolicy = v as PconSettings["conflictPolicy"];
+							save();
+						});
+					});
+				},
+			},
+			{
+				name: "Merge concurrent edits",
+				desc: "When the same note changed on two devices in different places, combine both edits into one file.",
+				help: "A three-way merge against the revision both edits started from: changes to different lines both land, identical changes land once, and additions at the same spot go in edit order, so every device produces the same file. Edits that collide on the same lines still keep both copies, and non-text files never merge. Applies with the Keep both and Ask policies.",
+				build: (st) => {
+					st.addToggle((t) =>
+						t.setValue(s.autoMerge).onChange((v) => {
+							s.autoMerge = v;
+							save();
+						})
+					);
+				},
+			},
+			{
+				name: "Delete guard",
+				desc: "Pause when one sync would delete more than this share of the vault.",
+				help: "If the Dropbox folder is emptied, or a scan goes wrong, a naive sync would mirror that destruction. Past this threshold (and always more than 10 files), Power Connect holds the deletions: a manual sync shows them for review, a background sync completes everything else and leaves the deletions for you. Local deletions also always go to the trash, and Dropbox keeps 30 days of history.",
+				build: (st) => {
+					st.addSlider((sl) =>
+						sl
+							.setLimits(5, 100, 5)
+							.setValue(s.deleteGuardPct)
+							.setDynamicTooltip()
+							.onChange((v) => {
+								s.deleteGuardPct = v;
+								save();
+							})
+					);
+				},
+			},
+		];
+
+		/* ---------------- Selection ---------------- */
+
+		let exTarget: "shared" | "device" = "shared";
+		const whatSyncs: Row[] = [
+			intro("Everything in the vault syncs unless excluded here. Sign-in tokens, the passphrase, and the sync journal never sync; they live in per-device storage."),
+			{
+				name: "Exclude patterns",
+				desc: "One per line, gitignore style.",
+				cls: "pcon-excludes",
+				help: "Patterns match anywhere unless they contain a slash; a leading slash anchors to the vault root, a trailing slash means a folder, * matches within a name, ** crosses folders, and ! re-includes. Examples: 'Private/' skips that folder anywhere, '/Templates/' only at the root, '*.pdf' skips PDFs everywhere. Newly excluded files are left alone everywhere, never deleted.",
+				build: (st) => {
+					st.addTextArea((t) => {
+						t.setPlaceholder("Private/\n*.mp4\n/Big Attachments/\n!Private/share.md")
+							.setValue(s.excludes)
+							.onChange((v) => {
+								s.excludes = v;
+								save();
+								this.plugin.applySettings();
+							});
+						t.inputEl.rows = 6;
+					});
+				},
+			},
+			{
+				name: "Exclude patterns, this device only",
+				desc: "Same syntax; applies only here and never syncs anywhere.",
+				cls: "pcon-excludes",
+				help: "For keeping a lean phone against a full desktop: exclude heavy folders here on the phone and every other device still syncs them. These rules live in this device's local storage, outside every synced file, so nothing that syncs settings between devices can carry them along.",
+				build: (st) => {
+					st.addTextArea((t) => {
+						t.setPlaceholder("Attachments/\n*.mp3")
+							.setValue(this.plugin.deviceExcludes)
+							.onChange((v) => this.plugin.saveDeviceExcludes(v));
+						t.inputEl.rows = 3;
+					});
+				},
+			},
+			{
+				name: "Exclude a folder",
+				desc: "Pick a folder and its pattern is written into the chosen list for you.",
+				build: (st) => {
+					st.addDropdown((d) =>
+						d
+							.addOption("shared", "Every device")
+							.addOption("device", "This device only")
+							.setValue(exTarget)
+							.onChange((v) => (exTarget = v as "shared" | "device"))
+					);
+					st.addText((t) => {
+						t.setPlaceholder("start typing a folder name");
+						new FolderSuggest(this.app, t.inputEl, (folder) => {
+							const line = `${folder.path}/`;
+							if (exTarget === "device") this.plugin.saveDeviceExcludes(this.plugin.deviceExcludes ? `${this.plugin.deviceExcludes}\n${line}` : line);
+							else {
+								s.excludes = s.excludes ? `${s.excludes}\n${line}` : line;
+								save();
+								this.plugin.applySettings();
+							}
+							this.refresh();
+						});
+					});
+				},
+			},
+		];
+
+		// This was a bare heading inside "What syncs" rather than a section of its
+		// own, so it becomes a group and keeps the line that explained it.
+		const fileTypes: Row[] = [
+			intro("Sugar over the device-only patterns above: turning a type off writes its extension patterns there."),
+		];
+		fileTypes.push(...TYPE_GROUPS.map((g) => ({
+			name: g.name,
+			desc: g.exts.map((e) => `.${e}`).join(", "),
+			build: (st: Setting) => {
+				const lines = () => this.plugin.deviceExcludes.split(/\r?\n/).map((l) => l.trim());
+				const allOff = () => g.exts.every((e) => lines().includes(`*.${e}`));
+				st.addToggle((t) =>
+					t.setValue(!allOff()).onChange((on) => {
+						let next = lines().filter((l) => !g.exts.includes(l.replace(/^\*\./, "")));
+						if (!on) next = [...next, ...g.exts.map((e) => `*.${e}`)];
+						this.plugin.saveDeviceExcludes(next.filter(Boolean).join("\n"));
+						this.refresh();
+					})
+				);
+			},
+		})));
+
+		// these sat under the file-types heading in the tab bar version, so they
+		// stay in that group rather than gaining a heading of their own
+		const limits: Row[] = [
+			{
+				name: "Skip files larger than",
+				desc: "Big files stay where they are, in both directions.",
+				help: "Over the cap, a file neither uploads from this device nor downloads to it; the sync log records each skip. Files that already synced are never deleted by lowering the cap, and raising it brings the bigger files back into play on the next sync.",
+				build: (st) => {
+					st.addDropdown((d) => {
+						const opts: [string, string][] = [
+							["0", "No limit"],
+							["5", "5 MB"],
+							["10", "10 MB"],
+							["25", "25 MB"],
+							["50", "50 MB"],
+							["100", "100 MB"],
+							["250", "250 MB"],
+						];
+						for (const [v, l] of opts) d.addOption(v, l);
+						d.setValue(String(s.maxFileMB)).onChange((v) => {
+							s.maxFileMB = Number(v);
+							save();
+						});
+					});
+				},
+			},
+			{
+				name: "Sync Obsidian settings (.obsidian)",
+				desc: "Themes, snippets, app settings, plugin list, and plugin code.",
+				help: "Workspace layout files stay excluded (each device keeps its own open tabs). Plugin settings files (data.json) are excluded by default because plugins routinely keep API keys in them; the toggle below opts them in. Power Connect itself travels like any other plugin, so an update here reaches your other devices; its journal never syncs, and its own settings file always does (it holds no credentials).",
+				build: (st) => {
+					st.addToggle((t) =>
+						t.setValue(s.syncConfig).onChange((v) => {
+							s.syncConfig = v;
+							save();
+							this.plugin.applySettings();
+							this.refresh(); // the plugin-data row below appears or goes
+						})
+					);
+				},
+			},
+		];
+		if (s.syncConfig) {
+			limits.push({
+				name: "Include plugin settings files",
+				desc: "Sync every plugin's data.json too. They routinely hold API keys, so they travel only under encryption: a fully encrypted folder, or plugin settings protection chosen in the guided setup. Without either, they are held back and the sync log says so.",
+				help: "Consider end-to-end encryption if you turn this on: with it, Dropbox stores only ciphertext, so keys inside plugin settings stay private. Power Connect's own data.json is always excluded regardless, since it holds your Dropbox tokens.",
+				build: (st) => {
+					st.addToggle((t) =>
+						t.setValue(s.syncPluginData).onChange((v) => {
+							s.syncPluginData = v;
+							save();
+							this.plugin.applySettings();
+						})
+					);
+				},
+			});
+		}
+
+		/* ---------------- Advanced ---------------- */
+
+		const run: Row[] = [
+			{
+				name: "Sync",
+				desc: "Run one now, or preview what the next sync would do without touching anything.",
+				build: (st) => {
+					st.addButton((b) => b.setButtonText("Preview sync").onClick(() => void this.plugin.previewSync()));
+					st.addButton((b) =>
+						b
+							.setButtonText("Sync now")
+							.setCta()
+							.onClick(() => void this.plugin.syncNow("settings", true))
+					);
+				},
+			},
+			{
+				name: "Sync log",
+				desc: "What happened, file by file, this session.",
+				build: (st) => {
+					st.addButton((b) => b.setButtonText("Show log").onClick(() => new LogModal(this.app, this.plugin).open()));
+				},
+			},
+		];
+
+		const tuning: Row[] = [
+			{
+				name: "Parallel transfers",
+				desc: "How many files move at once. Uploads stage without Dropbox's write lock and commit in batches, so higher values genuinely help on a big first sync.",
+				build: (st) => {
+					st.addDropdown((d) => {
+						for (const n of [1, 2, 3, 4, 6, 8, 12]) d.addOption(String(n), String(n));
+						d.setValue(String(s.concurrency)).onChange((v) => {
+							s.concurrency = Number(v);
+							save();
+						});
+					});
+				},
+			},
+			{
+				name: "Verbose log",
+				desc: "Include debug detail in the sync log.",
+				build: (st) => {
+					st.addToggle((t) =>
+						t.setValue(s.verboseLog).onChange((v) => {
+							s.verboseLog = v;
+							save();
+						})
+					);
+				},
+			},
+		];
+
+		const recovery: Row[] = [
+			{
+				name: "Full rescan",
+				desc: "Re-check every file's content against the journal on the next sync.",
+				help: "The normal scan trusts unchanged size and modification time. A full rescan rehashes everything and relists Dropbox, which catches edits that kept the same timestamp. Slower, never destructive.",
+				build: (st) => {
+					st.addButton((b) =>
+						b.setButtonText("Rescan and sync").onClick(() => {
+							(this.app as unknown as { commands: { executeCommandById: (id: string) => void } }).commands.executeCommandById("powerconnect:rescan");
+						})
+					);
+				},
+			},
+			{
+				name: "Reset sync state",
+				desc: "Forget the sync journal on this device. The next sync re-merges both sides from scratch.",
+				build: (st) => {
+					st.addButton((b) =>
+						b
+							.setButtonText("Reset")
+							.setWarning()
+							.onClick(() =>
+								new ConfirmModal(
+									this.app,
+									"Reset sync state?",
+									"The journal on this device is forgotten. Nothing is deleted anywhere: the next sync pairs identical files by content and keeps both versions of any file that differs (as conflict copies). Use this after changing the Dropbox folder name, or if sync seems wedged.",
+									"Reset",
+									() => void this.plugin.resetState()
+								).open()
+							)
+					);
+				},
+			},
+			{
+				name: "Device name",
+				desc: "How this device is called in logs and status. Stays on this device.",
+				help: "Per-device, like the journal and sign-in: it never syncs, so every device can have its own.",
+				build: (st) => {
+					st.addText((t) =>
+						t
+							.setPlaceholder("for example: Steve's Desktop")
+							.setValue((this.app.loadLocalStorage("pcon-device-name") as string | null) ?? "")
+							.onChange((v) => this.app.saveLocalStorage("pcon-device-name", v.trim() || null))
+					);
+				},
+			},
+		];
+
+		const about: Row[] = [
+			{
+				name: `Power Connect ${this.plugin.manifest.version}`,
+				desc: `Build ${PCON_BUILD}. Last synced ${this.plugin.lastSyncMs ? new Date(this.plugin.lastSyncMs).toLocaleString() : "never"}.`,
+			},
+		];
+
+		return [
+			{ id: "account", label: "Account", groups: accountGroups },
+			{
+				id: "sync",
+				label: "Sync",
+				groups: [
+					{ heading: "When to sync", rows: whenToSync },
+					{ heading: "Conflicts and safety", rows: conflicts },
+				],
+			},
+			{
+				id: "selection",
+				label: "Selection",
+				groups: [
+					{ heading: "What syncs", rows: whatSyncs },
+					{ heading: "File types on this device", rows: [...fileTypes, ...limits] },
+				],
+			},
+			{ id: "shares", label: "Shares", groups: [{ heading: "Shares", rows: shareRows }] },
+			{
+				id: "advanced",
+				label: "Advanced",
+				groups: [
+					{ heading: "Run", rows: run },
+					{ heading: "Tuning", rows: tuning },
+					{ heading: "Recovery", rows: recovery },
+					{ heading: "About", rows: about },
+				],
+			},
+		];
 	}
 }
