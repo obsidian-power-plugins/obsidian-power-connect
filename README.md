@@ -4,7 +4,7 @@ Sync your Obsidian vault with your own Dropbox. Two-way, selective, and cross-pl
 
 Power Connect talks straight from Obsidian to Dropbox over your own Dropbox "app", so your notes never pass through anyone else's machine. It syncs deltas, pairs identical files by content instead of re-uploading them, keeps both versions when two devices edit the same note, previews any sync before it happens, and can encrypt everything end-to-end so Dropbox itself cannot read a word.
 
-[<img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy me a coffee" width="200">](https://buymeacoffee.com/powerplugins)
+[![Buy me a coffee](https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png)](https://buymeacoffee.com/powerplugins)
 
 ## How it works
 
