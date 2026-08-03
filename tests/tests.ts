@@ -52,8 +52,8 @@ import {
 	transferTier,
 	windowsUnsafe,
 	withinSizeLimit,
-} from "./core";
-import { NotEncryptedError, WrongKeyError, b64ToBytes, bytesToB64, decryptBytes, deriveKey, encryptBytes, looksEncrypted, makeCheck, makeSalt, verifyCheck } from "./crypto";
+} from "../src/core";
+import { NotEncryptedError, WrongKeyError, b64ToBytes, bytesToB64, decryptBytes, deriveKey, encryptBytes, looksEncrypted, makeCheck, makeSalt, verifyCheck } from "../src/crypto";
 import {
 	MemberKeys,
 	ShareCodeOutdated,
@@ -92,8 +92,8 @@ import {
 	publishShare,
 	pullShare,
 	resolveShareFiles,
-} from "./share";
-import { FakeServer, SimDevice, bytesOf, contentSurvives, converge, fleetDiff, mulberry32, textOf } from "./sim";
+} from "../src/share";
+import { FakeServer, SimDevice, bytesOf, contentSurvives, converge, fleetDiff, mulberry32, textOf } from "../src/sim";
 import manifest from "../manifest.json";
 import pkg from "../package.json";
 import versions from "../versions.json";
@@ -1703,7 +1703,7 @@ async function simScenarios() {
 
 	console.log("protectionZone: folder names with spaces and multiple folders");
 	{
-		const { protectionZone } = require("./core");
+		const { protectionZone } = require("../src/core");
 		const folders = ["My Email", "Bank Statements"];
 		// a space in the folder name must not break the match at any depth
 		eq(protectionZone("My Email/CoServ bill.md", ".obsidian", "powerconnect", folders), "folder:my email", "a top-level folder with a space matches its files");
