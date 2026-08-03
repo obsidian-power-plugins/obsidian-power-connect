@@ -4,6 +4,8 @@ Sync your Obsidian vault with your own Dropbox. Two-way, selective, and cross-pl
 
 Power Connect talks straight from Obsidian to Dropbox over your own Dropbox "app", so your notes never pass through anyone else's machine. It syncs deltas, pairs identical files by content instead of re-uploading them, keeps both versions when two devices edit the same note, previews any sync before it happens, and can encrypt everything end-to-end so Dropbox itself cannot read a word.
 
+[<img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy me a coffee" width="200">](https://buymeacoffee.com/powerplugins)
+
 ## How it works
 
 - Your vault lives in one folder under `Apps/<your app>/` in Dropbox. The app you create has **App folder** access only: Power Connect cannot see the rest of your Dropbox even if it wanted to.
@@ -165,5 +167,3 @@ MIT
 Power Connect is built and maintained by one person. If it earns a place in your
 daily vault, you can [buy me a coffee](https://buymeacoffee.com/powerplugins).
 Nothing in the plugin is held back either way.
-
-[<img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy me a coffee" width="200">](https://buymeacoffee.com/powerplugins)
