@@ -1071,7 +1071,7 @@ function hunksBetween(a: string[], b: string[]): Hunk[] {
 		// appear in the same order on both sides
 		const tails: number[] = [];
 		const tailAt: number[] = [];
-		const prev: number[] = new Array(anchors.length).fill(-1);
+		const prev: number[] = new Array<number>(anchors.length).fill(-1);
 		for (let i = 0; i < anchors.length; i++) {
 			const v = anchors[i].bi;
 			let lo = 0;

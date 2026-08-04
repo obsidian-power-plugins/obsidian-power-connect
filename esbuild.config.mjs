@@ -14,7 +14,15 @@ const ctx = await esbuild.context({
 	// older iOS. Our own source has none, but dependencies do. Declaring the
 	// feature unavailable makes esbuild emit new RegExp("...") instead, which
 	// parses on any engine and can only fail if that code path actually runs.
-	supported: { "regexp-lookbehind-assertions": false },
+	// Obsidian evaluates main.js as CommonJS. Left alone, esbuild passes a
+	// dynamic import() of an external module straight through, and a native
+	// import("node:http") inside a CJS module in the renderer is not something
+	// to rely on resolving. Declaring the syntax unavailable makes esbuild emit
+	// the Promise.resolve().then(() => require(...)) form instead, which is what
+	// the one lazy Node import (the Google sign-in server) needs at runtime.
+	// The source keeps its import(): that is what the directory's linter reads,
+	// and it is still the call that never happens on mobile.
+	supported: { "regexp-lookbehind-assertions": false, "dynamic-import": false },
 	logLevel: "info",
 	sourcemap: prod ? false : "inline",
 	treeShaking: true,

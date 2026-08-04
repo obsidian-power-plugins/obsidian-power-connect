@@ -338,7 +338,7 @@ export function parseShareCode(text: string): ShareCode | null {
 /* ---------------- manifest ---------------- */
 
 export async function encodeManifest(key: CryptoKey, m: ShareManifest): Promise<ArrayBuffer> {
-	return encryptBytes(key, new TextEncoder().encode(JSON.stringify(m)).buffer as ArrayBuffer);
+	return encryptBytes(key, new TextEncoder().encode(JSON.stringify(m)).buffer);
 }
 
 /** Thrown when the bytes at the manifest URL are not a manifest this key can
@@ -848,7 +848,7 @@ export async function publishShare(io: PublishIO, share: OwnedShare, files: Shar
  *  upload, never a republish of the content. */
 export async function publishKeyring(io: PublishIO, share: OwnedShare): Promise<string> {
 	const path = keyringPath(share.remoteFolder);
-	const body = new TextEncoder().encode(JSON.stringify(await buildKeyring(share))).buffer as ArrayBuffer;
+	const body = new TextEncoder().encode(JSON.stringify(await buildKeyring(share))).buffer;
 	await io.upload(path, body);
 	return share.keyringUrl || (await io.link(path));
 }

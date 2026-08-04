@@ -85,7 +85,7 @@ export async function decryptBytes(key: CryptoKey, data: ArrayBuffer): Promise<A
 /** A small value the marker file stores so a second device can verify its
  *  passphrase before touching anything. */
 export async function makeCheck(key: CryptoKey): Promise<string> {
-	return bytesToB64(new Uint8Array(await encryptBytes(key, new TextEncoder().encode(CHECK_TEXT).buffer as ArrayBuffer)));
+	return bytesToB64(new Uint8Array(await encryptBytes(key, new TextEncoder().encode(CHECK_TEXT).buffer)));
 }
 
 export async function verifyCheck(key: CryptoKey, check: string): Promise<boolean> {

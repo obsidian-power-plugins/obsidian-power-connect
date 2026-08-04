@@ -30,7 +30,7 @@ async function transport(o: { url: string; method: string; contentType?: string;
 		get json() {
 			return JSON.parse(text) as unknown;
 		},
-	} as RequestUrlResponse;
+	};
 }
 
 /* Dropbox v2: requestUrl on desktop (Electron, no CORS), the webview fetch
@@ -82,7 +82,7 @@ function header(r: RequestUrlResponse, name: string): string | undefined {
 function errTag(v: unknown, depth = 0): string {
 	if (!v || typeof v !== "object" || depth > 6) return "";
 	const o = v as Record<string, unknown>;
-	const own = typeof o[".tag"] === "string" ? (o[".tag"] as string) : "";
+	const own = typeof o[".tag"] === "string" ? (o[".tag"]) : "";
 	for (const k of Object.keys(o)) {
 		if (k === ".tag") continue;
 		const sub = errTag(o[k], depth + 1);
@@ -122,7 +122,7 @@ export async function longpollChanges(cursor: string, timeoutSec = 60): Promise<
 	});
 	if (r.status !== 200) throw apiError(r, "watch Dropbox for changes");
 	const b = bodyJson(r) ?? {};
-	return { changes: !!b.changes, backoff: typeof b.backoff === "number" ? (b.backoff as number) : undefined };
+	return { changes: !!b.changes, backoff: typeof b.backoff === "number" ? (b.backoff) : undefined };
 }
 
 export function authUrl(appKey: string, challenge: string): string {
@@ -144,8 +144,8 @@ async function oauthToken(params: Record<string, string>, doing: string): Promis
 	});
 	if (r.status !== 200) {
 		const body = bodyJson(r);
-		const code = typeof body?.error === "string" ? (body.error as string) : "";
-		const desc = typeof body?.error_description === "string" ? (body.error_description as string) : "";
+		const code = typeof body?.error === "string" ? (body.error) : "";
+		const desc = typeof body?.error_description === "string" ? (body.error_description) : "";
 		throw new DropboxError(`Could not ${doing}: ${desc || code || `HTTP ${r.status}`}`, r.status, code);
 	}
 	return r.json as TokenReply;

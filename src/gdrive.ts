@@ -62,8 +62,14 @@ function gError(r: RequestUrlResponse, doing: string): DropboxError {
 
 /** Desktop-only sign-in: a loopback server catches the OAuth redirect. */
 export async function gdriveSignIn(clientId: string, clientSecret: string, openUrl: (url: string) => void): Promise<{ refresh: string; access: string; expiry: number }> {
-	if (!Platform.isDesktopApp) throw new Error("Google sign-in needs a desktop; connect there first.");
-	const http = require("node:http") as typeof import("node:http");
+	// Imported here rather than at the top of the file, and only once a sign-in
+	// is actually under way: the module does not exist on mobile. A dynamic
+	// import also comes typed, which a require() call does not, so everything
+	// the server does below is checked. Both platform tests stand on purpose:
+	// isDesktopApp is the one that means Node is there, and isDesktop is the one
+	// the directory's linter reads as the guard.
+	const http = Platform.isDesktop && Platform.isDesktopApp ? await import("node:http") : null;
+	if (!http) throw new Error("Google sign-in needs a desktop; connect there first.");
 	const verifier = randB64url(48);
 	const challenge = await pkceChallenge(verifier);
 	let redirectUsed = "";
@@ -349,7 +355,7 @@ export class GDrive {
 		const page = await this.query(`'${rootId}' in parents and trashed=false`, "probe the Drive folder");
 		return page.files.slice(0, limit).map((f) => {
 			const p = `/${normRel(root)}/${f.name}`;
-			return f.mimeType === FOLDER_MIME ? ({ tag: "folder", pathDisplay: p } as ListEntry) : ({ tag: "file", meta: this.meta(f, p) } as ListEntry);
+			return f.mimeType === FOLDER_MIME ? ({ tag: "folder", pathDisplay: p }) : ({ tag: "file", meta: this.meta(f, p) });
 		});
 	}
 
@@ -430,7 +436,7 @@ export class GDrive {
 			const r = await this.call(url, `upload ${path}`, {
 				method,
 				headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
-				body: body.buffer as ArrayBuffer,
+				body: body.buffer,
 			});
 			if (r.status !== 200) throw gError(r, `upload ${path}`);
 			const f = JSON.parse(r.text) as GFile;

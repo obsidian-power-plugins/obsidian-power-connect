@@ -366,7 +366,7 @@ export default class PowerConnectPlugin extends Plugin {
 		// the renderer down too fast for the write to finish; see takePending()
 		const pending = this.takePending(this.stripSecrets(file));
 		this.adoptSettings(pending ?? onDisk);
-		const f = file as Record<string, unknown> | null;
+		const f = file;
 		const fileHasSecrets = !!f && SECRET_KEYS.some((k) => f[k] != null && f[k] !== "" && f[k] !== 0);
 		// upgrade path: secrets found in data.json move into localStorage once,
 		// then the file is rewritten without them
@@ -667,7 +667,7 @@ export default class PowerConnectPlugin extends Plugin {
 		if (!disk) return null;
 		const d = { ...disk } as Record<string, unknown>;
 		for (const k of SECRET_KEYS) delete d[k];
-		return d as Partial<PconSettings>;
+		return d;
 	}
 
 	/** The one write path for settings; `saving` plus `saveTimer` cover the
@@ -1858,7 +1858,7 @@ export default class PowerConnectPlugin extends Plugin {
 			const plain = key && looksEncrypted(bytes) ? await decryptBytes(key, bytes) : bytes;
 			const raw = this.stripSecrets(JSON.parse(new TextDecoder().decode(plain)) as Partial<PconSettings>);
 			if (!raw) return false;
-			this.adoptSettings(Object.assign({}, this.settings, raw) as PconSettings);
+			this.adoptSettings(Object.assign({}, this.settings, raw));
 			this.queueSave();
 			this.applySettings();
 			this.log("info", "Adopted this vault's shared settings from the Dropbox copy.");
@@ -1894,7 +1894,7 @@ export default class PowerConnectPlugin extends Plugin {
 			delete marker.secrets;
 		}
 		const body = new TextEncoder().encode(JSON.stringify(marker));
-		await this.remote.upload(`${root}/${MARKER_NAME}`, body.buffer as ArrayBuffer, { mode: "overwrite", clientModified: msToIsoSec(Date.now()) });
+		await this.remote.upload(`${root}/${MARKER_NAME}`, body.buffer, { mode: "overwrite", clientModified: msToIsoSec(Date.now()) });
 		this.engine.markerDirty();
 		this.engine.protectionSeen = on || !!marker.protectedFolders?.length;
 		this.refreshSettingsTab?.();
@@ -1954,7 +1954,7 @@ export default class PowerConnectPlugin extends Plugin {
 		this.queueSave();
 
 		const body = new TextEncoder().encode(JSON.stringify(marker));
-		await this.remote.upload(`${root}/${MARKER_NAME}`, body.buffer as ArrayBuffer, { mode: "overwrite", clientModified: msToIsoSec(Date.now()) });
+		await this.remote.upload(`${root}/${MARKER_NAME}`, body.buffer, { mode: "overwrite", clientModified: msToIsoSec(Date.now()) });
 		this.engine.markerDirty();
 		this.engine.protectionSeen = !!marker.secrets;
 
@@ -1998,7 +1998,7 @@ export default class PowerConnectPlugin extends Plugin {
 			marker = { format: 1, e2e: false };
 		}
 		const body = new TextEncoder().encode(JSON.stringify(marker));
-		await this.remote.upload(`${root}/${MARKER_NAME}`, body.buffer as ArrayBuffer, { mode: "overwrite", clientModified: msToIsoSec(Date.now()) });
+		await this.remote.upload(`${root}/${MARKER_NAME}`, body.buffer, { mode: "overwrite", clientModified: msToIsoSec(Date.now()) });
 		this.settings.e2eEnabled = on;
 		this.queueSave();
 		this.engine.markerDirty(); // the next run re-reads the marker and derives the key
@@ -4390,7 +4390,7 @@ class PconSettingTab extends PluginSettingTab {
 			const q = this.query.trim().toLowerCase();
 			setVisible(tabBar, !q);
 			for (const sec of Array.from(body.children) as HTMLElement[]) {
-				const items = Array.from(sec.querySelectorAll(":scope > .setting-item:not(.setting-item-heading)")) as HTMLElement[];
+				const items = Array.from(sec.querySelectorAll<HTMLElement>(":scope > .setting-item:not(.setting-item-heading)"));
 				if (!q) {
 					for (const it of items) setVisible(it, true);
 					setVisible(sec, sec.dataset.tab === this.activeTab);

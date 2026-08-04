@@ -20,7 +20,7 @@ import {
 	normRel,
 	stripDeletes,
 } from "./core";
-import { EngineHost, PrepResult, RemoteIO, SyncEngine, VaultIO } from "./engine";
+import { EngineHost, JournalShape, PrepResult, RemoteIO, SyncEngine, VaultIO } from "./engine";
 
 /** Thrown by the fault injector to model the process dying mid-run. Once it
  *  fires, every further IO on that device also throws, so the run collapses
@@ -33,7 +33,7 @@ export class SimCrash extends Error {
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
-export const bytesOf = (text: string): ArrayBuffer => enc.encode(text).buffer as ArrayBuffer;
+export const bytesOf = (text: string): ArrayBuffer => enc.encode(text).buffer;
 export const textOf = (bytes: ArrayBuffer): string => dec.decode(bytes);
 
 /** Deterministic PRNG so a failing fuzz round is reproducible from its seed. */
@@ -412,7 +412,7 @@ export class SimDevice {
 
 	makeEngine() {
 		this.engine = new SyncEngine(this.host(), this.vault.io(), this.server.remote());
-		if (this.journal) this.engine.loadJournal(JSON.parse(this.journal));
+		if (this.journal) this.engine.loadJournal(JSON.parse(this.journal) as JournalShape);
 	}
 
 	/** Rebuild from the last persisted journal, as a process restart would. */

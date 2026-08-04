@@ -603,7 +603,7 @@ export class SyncEngine {
 			}
 			const body = new TextEncoder().encode(JSON.stringify(fresh));
 			try {
-				await this.remote.upload(path, body.buffer as ArrayBuffer, { mode: "add", clientModified: msToIsoSec(Date.now()) });
+				await this.remote.upload(path, body.buffer, { mode: "add", clientModified: msToIsoSec(Date.now()) });
 				this.markerChecked = true;
 				return;
 			} catch (e) {
@@ -1122,7 +1122,7 @@ export class SyncEngine {
 		let baseBytes = new ArrayBuffer(0);
 		if (!noBase) {
 			try {
-				baseBytes = await this.remote.downloadRev!(b!.rev, l.path);
+				baseBytes = await this.remote.downloadRev!(b.rev, l.path);
 			} catch {
 				// revision expired or unreachable. Text keeps both; a settings file
 				// still merges, against an empty base.
@@ -1149,7 +1149,7 @@ export class SyncEngine {
 			? mergePluginData(baseText, localText, remoteText, conflictWinner(lq, localHash, r.mtime, remoteHash) === "remote")
 			: mergeThree(baseText, localText, remoteText, localFirst);
 		if (merged == null) return false;
-		const mergedBytes = new TextEncoder().encode(merged).buffer as ArrayBuffer;
+		const mergedBytes = new TextEncoder().encode(merged).buffer;
 		const mergedHash = await this.hashOf(mergedBytes);
 		const uk = this.fileKey(l.path, prep);
 		const stored = uk ? await encryptBytes(uk, mergedBytes) : mergedBytes;
