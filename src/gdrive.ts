@@ -42,7 +42,7 @@ interface GFile {
 }
 
 function sleep(ms: number): Promise<void> {
-	return new Promise((r) => setTimeout(r, ms));
+	return new Promise((r) => window.setTimeout(r, ms));
 }
 
 function gError(r: RequestUrlResponse, doing: string): DropboxError {
@@ -76,12 +76,12 @@ export async function gdriveSignIn(clientId: string, clientSecret: string, openU
 			res.end("<html><body><p>Power Connect is connected. You can close this tab and return to Obsidian.</p></body></html>");
 			if (got || err) {
 				server.close();
-				clearTimeout(timer);
+				window.clearTimeout(timer);
 				if (got) resolve(got);
 				else reject(new Error(`Google sign-in failed: ${err}`));
 			}
 		});
-		const timer = setTimeout(
+		const timer = window.setTimeout(
 			() => {
 				server.close();
 				reject(new Error("Google sign-in timed out."));

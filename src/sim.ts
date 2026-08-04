@@ -9,7 +9,6 @@
  * first-created display-case preservation, and cursor invalidation. */
 
 import {
-	ConflictChoice,
 	DropboxError,
 	ListEntry,
 	PconSettings,
@@ -18,8 +17,6 @@ import {
 	RunStats,
 	contentHash,
 	freshStats,
-	isoToMs,
-	msToIsoSec,
 	normRel,
 	stripDeletes,
 } from "./core";

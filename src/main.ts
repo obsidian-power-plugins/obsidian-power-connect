@@ -1,4 +1,4 @@
-import { AbstractInputSuggest, App, ItemView, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, type SettingDefinitionItem, type SettingDefinitionPage, type SettingDefinitionRender, TFile, TFolder, WorkspaceLeaf, requestUrl, setIcon } from "obsidian";
+import { AbstractInputSuggest, App, ButtonComponent, ItemView, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, type SettingDefinitionItem, type SettingDefinitionPage, type SettingDefinitionRender, SliderComponent, TFile, TFolder, WorkspaceLeaf, requestUrl, setIcon } from "obsidian";
 import {
 	Action,
 	BaseEntry,
@@ -90,7 +90,30 @@ import { OneDrive, onedriveDeviceCode, onedrivePollToken } from "./onedrive";
 import { GDrive, gdriveSignIn } from "./gdrive";
 
 function sleep(ms: number): Promise<void> {
-	return new Promise((r) => setTimeout(r, ms));
+	return new Promise((r) => window.setTimeout(r, ms));
+}
+
+/** Paint a button as destructive.
+ *
+ *  `setDestructive` arrived in 1.13 and this plugin's floor is 1.8.7, where
+ *  calling it would throw, so the old `setWarning` has to stay reachable. The
+ *  cast is the runtime check: the inline type carries no deprecation, which is
+ *  also what keeps the fallback from being reported as one. */
+function markDestructive(b: ButtonComponent): ButtonComponent {
+	const btn = b as unknown as { setDestructive?: () => void; setWarning: () => void };
+	if (btn.setDestructive) btn.setDestructive();
+	else btn.setWarning();
+	return b;
+}
+
+/** Keep a slider's value visible while it is dragged.
+ *
+ *  1.13 shows it inline and retired `setDynamicTooltip`, but on 1.8.7 the call
+ *  is the only thing that shows the number at all, so it is reached through a
+ *  cast rather than named: absent on new builds, harmless on old ones. */
+function showSliderValue(sl: SliderComponent): SliderComponent {
+	(sl as unknown as { setDynamicTooltip?: () => void }).setDynamicTooltip?.();
+	return sl;
 }
 
 interface LogEntry {
@@ -361,7 +384,7 @@ export default class PowerConnectPlugin extends Plugin {
 
 		this.addCommand({ id: "sync-now", icon: "refresh-cw", name: "Sync now", callback: () => void this.syncNow("command", true) });
 		this.addCommand({ id: "preview", icon: "eye", name: "Preview sync (dry run)", callback: () => void this.previewSync() });
-		this.addCommand({ id: "connect", icon: "settings", name: "Set up Power Connect", callback: () => new SetupWizard(this.app, this).open() });
+		this.addCommand({ id: "connect", icon: "settings", name: "Set up syncing", callback: () => new SetupWizard(this.app, this).open() });
 		this.addCommand({ id: "show-log", icon: "file-text", name: "Show sync log", callback: () => new LogModal(this.app, this).open() });
 		this.registerView(VIEW_TYPE_SHARES, (leaf) => new SharesView(leaf, this));
 		this.addRibbonIcon("share-2", "Power Connect: shares", () => void this.openSharesView());
@@ -1045,7 +1068,7 @@ export default class PowerConnectPlugin extends Plugin {
 						sub.key = contentKey;
 						await this.persistSettings();
 					}
-					const r = await pullShare(io, sub, state, contentKey, Math.max(0, this.settings.maxFileMB) * 1024 * 1024);
+					const r = await pullShare(io, sub, state, contentKey, Math.max(0, this.settings.maxFileMB) * 1024 * 1024, this.app.vault.configDir);
 					state.quiet = r.written || r.conflicts.length ? 0 : Math.min(state.quiet + 1, 5);
 					state.nextCheckMs = Date.now() + nextCheckDelay(Math.max(this.settings.autoMinutes, 1) * 60_000, state.quiet);
 					const summary = pullSummary(r);
@@ -1176,7 +1199,7 @@ export default class PowerConnectPlugin extends Plugin {
 				/* resolveShareFiles reports it as unreadable */
 			}
 		}
-		return resolveShareFiles(share, all, hashes, Math.max(0, this.settings.maxFileMB) * 1024 * 1024);
+		return resolveShareFiles(share, all, hashes, Math.max(0, this.settings.maxFileMB) * 1024 * 1024, this.app.vault.configDir);
 	}
 
 	/** Publish a share: upload what changed, refresh the index, and leave the
@@ -2037,11 +2060,9 @@ class ObsidianVaultIO implements VaultIO {
 		this.plugin.suppress(rel);
 		const f = this.app.vault.getAbstractFileByPath(rel);
 		if (f) {
-			try {
-				await this.app.vault.trash(f, true);
-			} catch {
-				await this.app.vault.trash(f, false);
-			}
+			// trashFile honors the vault's own "Deleted files" preference, which
+			// the system-trash-then-local fallback here was only approximating
+			await this.app.fileManager.trashFile(f);
 			return;
 		}
 		const ad = this.app.vault.adapter;
@@ -2994,7 +3015,7 @@ class DeleteHoldModal extends Modal {
 		if (paths.length > 30) list.createDiv({ cls: "pcon-plan-item pcon-muted", text: `and ${paths.length - 30} more` });
 		new Setting(contentEl)
 			.addButton((b) => b.setButtonText("Sync without deleting").setCta().onClick(() => this.answer("skip")))
-			.addButton((b) => b.setButtonText("Delete them").setWarning().onClick(() => this.answer("delete")))
+			.addButton((b) => markDestructive(b.setButtonText("Delete them")).onClick(() => this.answer("delete")))
 			.addButton((b) => b.setButtonText("Cancel sync").onClick(() => this.answer("cancel")));
 	}
 
@@ -3084,9 +3105,8 @@ class ConfirmModal extends Modal {
 		this.contentEl.createEl("p", { text: this.body });
 		new Setting(this.contentEl)
 			.addButton((b) =>
-				b
+				markDestructive(b)
 					.setButtonText(this.cta)
-					.setWarning()
 					.onClick(() => {
 						this.close();
 						this.onConfirm();
@@ -3712,9 +3732,8 @@ class ShareContentsModal extends Modal {
 		}
 		for (const path of [...this.share.attached]) {
 			new Setting(c).setName(pathBase(path)).setDesc(path).addButton((b) =>
-				b
+				markDestructive(b)
 					.setButtonText("Remove")
-					.setWarning()
 					.setTooltip("Stops sharing this note. The copy the other person already has stays in their vault.")
 					.onClick(() => {
 						this.share.attached = this.share.attached.filter((a) => a !== path);
@@ -3885,9 +3904,8 @@ class ManageShareModal extends Modal {
 			);
 			if (m.state === "approved") {
 				row.addButton((b) =>
-					b
+					markDestructive(b)
 						.setButtonText("Remove")
-						.setWarning()
 						.setTooltip("Withdraws access and re-keys the share. What they already downloaded stays with them.")
 						.onClick(() => void this.plugin.setMemberState(this.share.id, m.memberId, "revoked").then(() => this.render()))
 				);
@@ -4792,10 +4810,9 @@ class PconSettingTab extends PluginSettingTab {
 				help: "If the Dropbox folder is emptied, or a scan goes wrong, a naive sync would mirror that destruction. Past this threshold (and always more than 10 files), Power Connect holds the deletions: a manual sync shows them for review, a background sync completes everything else and leaves the deletions for you. Local deletions also always go to the trash, and Dropbox keeps 30 days of history.",
 				build: (st) => {
 					st.addSlider((sl) =>
-						sl
+						showSliderValue(sl)
 							.setLimits(5, 100, 5)
 							.setValue(s.deleteGuardPct)
-							.setDynamicTooltip()
 							.onChange((v) => {
 								s.deleteGuardPct = v;
 								save();
@@ -4919,7 +4936,9 @@ class PconSettingTab extends PluginSettingTab {
 				},
 			},
 			{
-				name: "Sync Obsidian settings (.obsidian)",
+				// the folder is named after the vault's own config dir, which is
+				// only `.obsidian` by default
+				name: `Sync Obsidian settings (${this.plugin.app.vault.configDir})`,
 				desc: "Themes, snippets, app settings, plugin list, and plugin code.",
 				help: "Workspace layout files stay excluded (each device keeps its own open tabs). Plugin settings files (data.json) are excluded by default because plugins routinely keep API keys in them; the toggle below opts them in. Power Connect itself travels like any other plugin, so an update here reaches your other devices; its journal never syncs, and its own settings file always does (it holds no credentials).",
 				build: (st) => {
@@ -5022,9 +5041,8 @@ class PconSettingTab extends PluginSettingTab {
 				desc: "Forget the sync journal on this device. The next sync re-merges both sides from scratch.",
 				build: (st) => {
 					st.addButton((b) =>
-						b
+						markDestructive(b)
 							.setButtonText("Reset")
-							.setWarning()
 							.onClick(() =>
 								new ConfirmModal(
 									this.app,

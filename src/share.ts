@@ -392,7 +392,16 @@ export interface SharePlan {
  *  with a fresh timestamp would hand their own sync an endless stream of
  *  changes to replicate. Skipping makes concurrent subscribers converge
  *  instead of fighting. */
-export function planSharePull(manifest: ShareManifest, local: Map<string, string | null>, state: ShareState, maxBytes = 0): SharePlan {
+/** Is this path the vault's configuration folder, or inside it?
+ *
+ *  The folder is only called `.obsidian` by default; a vault can be opened
+ *  with any name, so the caller passes `Vault#configDir` and the literal here
+ *  is a fallback for the pure callers (the tests) that have no vault. */
+export function inConfigFolder(path: string, configDir = ".obsidian"): boolean {
+	return path === configDir || path.startsWith(`${configDir}/`);
+}
+
+export function planSharePull(manifest: ShareManifest, local: Map<string, string | null>, state: ShareState, maxBytes = 0, configDir?: string): SharePlan {
 	const actions: ShareAction[] = [];
 	const seen = new Set<string>();
 
@@ -402,7 +411,7 @@ export function planSharePull(manifest: ShareManifest, local: Map<string, string
 		seen.add(path);
 
 		// a share is vault content; it never carries configuration or code
-		if (path.startsWith(".obsidian/") || path === ".obsidian" || junkFile(path)) continue;
+		if (inConfigFolder(path, configDir) || junkFile(path)) continue;
 		if (!fetchableUrl(entry.url)) {
 			actions.push({ t: "unsafe", path, why: "its link does not point at a known file host" });
 			continue;
@@ -501,14 +510,14 @@ async function localHashes(io: ShareIO, root: string, manifest: ShareManifest, s
 /** Fetch a share and apply it. Returns what happened; the caller decides
  *  what to say about it. Never throws for one bad file: a share with a dead
  *  link in it should still deliver everything else. */
-export async function pullShare(io: ShareIO, sub: Subscription, state: ShareState, contentKeyB64: string, maxBytes = 0): Promise<PullResult> {
+export async function pullShare(io: ShareIO, sub: Subscription, state: ShareState, contentKeyB64: string, maxBytes = 0, configDir?: string): Promise<PullResult> {
 	const key = await importShareKey(contentKeyB64);
 	const raw = await io.fetchBytes(sub.manifestUrl);
 	const manifest = await decodeManifest(key, raw);
 	const root = normRel(sub.localPath);
 
 	const local = await localHashes(io, root, manifest, state);
-	const plan = planSharePull(manifest, local, state, maxBytes);
+	const plan = planSharePull(manifest, local, state, maxBytes, configDir);
 
 	const result: PullResult = { plan, written: 0, conflicts: [], failed: [] };
 
@@ -594,7 +603,8 @@ export function resolveShareFiles(
 	share: { homePath: string; attached: string[] },
 	all: { path: string; size: number; mtime: number }[],
 	hashes: Map<string, string>,
-	maxBytes = 0
+	maxBytes = 0,
+	configDir?: string
 ): ResolveResult {
 	const home = normRel(share.homePath);
 	const files: ShareFile[] = [];
@@ -602,7 +612,7 @@ export function resolveShareFiles(
 	const taken = new Map<string, string>();
 
 	const consider = (local: string, sharePath: string, size: number, mtime: number) => {
-		if (local.startsWith(".obsidian/") || local === ".obsidian") {
+		if (inConfigFolder(local, configDir)) {
 			skipped.push({ local, why: "a share never carries plugin settings or code" });
 			return;
 		}
