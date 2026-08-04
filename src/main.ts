@@ -185,7 +185,10 @@ export default class PowerConnectPlugin extends Plugin {
 	private saveTimer: number | null = null;
 	private saving = false;
 	private baseline: PconSettings = DEFAULT_SETTINGS;
-	private externalReloadTimer: number | null = null;
+	/** data.json's size and mtime as we last saw them, so the desktop poll can
+	 *  tell a file someone else wrote from one nobody touched, without reading
+	 *  it; see watchDataFile(). */
+	private dataStamp: string | null = null;
 
 	/* journal file bookkeeping; the maps themselves live in the engine */
 	lastSyncMs = 0;
@@ -358,15 +361,22 @@ export default class PowerConnectPlugin extends Plugin {
 
 	async onload() {
 		const file = (await this.loadData()) as Partial<PconSettings> | null;
-		this.adoptSettings(Object.assign({}, DEFAULT_SETTINGS, file));
+		const onDisk = Object.assign({}, DEFAULT_SETTINGS, file);
+		// a change made in the last moment before a reload, which the app tore
+		// the renderer down too fast for the write to finish; see takePending()
+		const pending = this.takePending(this.stripSecrets(file));
+		this.adoptSettings(pending ?? onDisk);
 		const f = file as Record<string, unknown> | null;
 		const fileHasSecrets = !!f && SECRET_KEYS.some((k) => f[k] != null && f[k] !== "" && f[k] !== 0);
 		// upgrade path: secrets found in data.json move into localStorage once,
 		// then the file is rewritten without them
 		if (fileHasSecrets && this.app.loadLocalStorage("pcon-secrets") == null) this.stashSecrets();
 		this.overlaySecrets(this.settings);
-		this.baseline = structuredClone(this.settings);
-		if (fileHasSecrets) this.queueSave();
+		// baseline is the DISK state, not what we just adopted, so a replayed
+		// change reads as ours and actually reaches the file this time
+		this.overlaySecrets(onDisk);
+		this.baseline = structuredClone(onDisk);
+		if (fileHasSecrets || pending) this.queueSave();
 		await this.loadState();
 		this.igCache = buildIgnore(this.settings, this.app.vault.configDir, this.pluginDirName(), this.deviceExcludes.split(/\r?\n/));
 		this.log("debug", `Power Connect ${this.manifest.version} (build ${PCON_BUILD})`);
@@ -543,7 +553,8 @@ export default class PowerConnectPlugin extends Plugin {
 		if (this.saveTimer != null) {
 			window.clearTimeout(this.saveTimer);
 			this.saveTimer = null;
-			if (!this.persistSettingsSync()) void this.persistSettings();
+			this.stashPending();
+			void this.persistSettings();
 		}
 		if (this.watchTimer != null) window.clearTimeout(this.watchTimer);
 		if (this.autoTimer != null) window.clearInterval(this.autoTimer);
@@ -689,29 +700,49 @@ export default class PowerConnectPlugin extends Plugin {
 		}
 	}
 
-	/** Unload-time flush: an app reload (Ctrl+R) tears the renderer down
-	 *  before a pending async write can finish, so the last chance to save
-	 *  must not await. Desktop only; returns false where node fs is
-	 *  unavailable, and the caller falls back to the async path. */
-	private persistSettingsSync(): boolean {
-		if (!Platform.isDesktopApp) return false;
-		const basePath = (this.app.vault.adapter as unknown as { basePath?: string }).basePath;
-		if (!basePath) return false;
+	/**
+	 * Unload-time flush: an app reload (Ctrl+R) tears the renderer down before a
+	 * pending async write can finish, so the last chance to save must not await.
+	 *
+	 * Nothing that writes a file is synchronous here, so the settings go where
+	 * this device's secrets already go: localStorage, which does answer
+	 * immediately. The async save is still started, and usually lands (a plugin
+	 * being disabled is not a renderer going away); this is the copy that
+	 * survives when it does not, and the next load replays it. Both halves are
+	 * redacted, so the secrets stay in the one stash that owns them and a
+	 * redacted key can never read as a change against its own baseline.
+	 */
+	private stashPending() {
 		try {
-			const fs = require("node:fs") as typeof import("node:fs");
-			const file = [basePath, this.app.vault.configDir, "plugins", this.manifest.id, "data.json"].join("/");
-			let disk: Partial<PconSettings> | null = null;
-			try {
-				disk = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<PconSettings>;
-			} catch {
-				disk = null;
-			}
-			this.adoptSettings(mergeForSave(this.settings, this.baseline, this.stripSecrets(disk)));
-			fs.writeFileSync(file, JSON.stringify(this.redactForFile(this.settings), null, 2));
-			this.baseline = structuredClone(this.settings);
-			return true;
+			const pending = { settings: this.redactForFile(this.settings), baseline: this.redactForFile(this.baseline) };
+			this.app.saveLocalStorage("pcon-pending", JSON.stringify(pending));
 		} catch {
-			return false;
+			/* nothing to be done at unload; the async save is already in flight */
+		}
+	}
+
+	/**
+	 * The other half: the stash, merged over whatever the file says now, and
+	 * cleared either way so a replay happens once.
+	 *
+	 * It is merged rather than applied. data.json may have moved on since the
+	 * reload (another device syncing its own change in), and only the keys this
+	 * device actually changed have any claim on it: the same rule persistSettings
+	 * follows, with the stashed baseline standing in for the live one.
+	 */
+	private takePending(disk: Partial<PconSettings> | null): PconSettings | null {
+		const raw = this.app.loadLocalStorage("pcon-pending") as string | null;
+		if (!raw) return null;
+		this.app.saveLocalStorage("pcon-pending", null);
+		try {
+			const p = JSON.parse(raw) as { settings?: PconSettings; baseline?: PconSettings };
+			if (!p.settings || !p.baseline) return null;
+			const ours = Object.assign({}, DEFAULT_SETTINGS, p.settings);
+			const was = Object.assign({}, DEFAULT_SETTINGS, p.baseline);
+			if (JSON.stringify(ours) === JSON.stringify(was)) return null; // nothing was actually in flight
+			return mergeForSave(ours, was, disk);
+		} catch {
+			return null; // unreadable stash: the file is still the truth
 		}
 	}
 
@@ -723,24 +754,43 @@ export default class PowerConnectPlugin extends Plugin {
 		await this.adoptExternalData();
 	}
 
+	private dataPath(): string {
+		return `${this.app.vault.configDir}/plugins/${this.manifest.id}/data.json`;
+	}
+
+	/**
+	 * Desktop: notice that someone else rewrote data.json, so external edits are
+	 * adopted while you are looking rather than at the next restart.
+	 *
+	 * onExternalSettingsChange covers Obsidian's own Sync. A folder sync landing
+	 * another device's settings (including this plugin's own) is a plainer event
+	 * than that, and can arrive unannounced, so the file's own size and mtime are
+	 * the signal. Asking the vault adapter for them keeps this inside the vault:
+	 * it stats one known file under the config folder, never reaches for a path
+	 * of its own, and reads nothing until the stamp actually moves. Our own saves
+	 * move it too, and cost one wasted read that adoptExternalData recognizes as
+	 * its own echo and drops.
+	 */
 	private watchDataFile() {
 		if (!Platform.isDesktopApp) return;
-		const basePath = (this.app.vault.adapter as unknown as { basePath?: string }).basePath;
-		if (!basePath) return;
+		this.registerInterval(window.setInterval(() => void this.checkDataFile(), 5000));
+		// coming back to the window is when another device's change is most
+		// likely to be sitting there waiting, so look straight away
+		this.registerDomEvent(window, "focus", () => void this.checkDataFile());
+	}
+
+	private async checkDataFile() {
+		if (this.busySaving()) return; // our own write is on its way; let it land
 		try {
-			const fs = require("node:fs") as typeof import("node:fs");
-			const dir = [basePath, this.app.vault.configDir, "plugins", this.manifest.id].join("/");
-			const watcher = fs.watch(dir, (_evt, name) => {
-				if (name && name.toString() !== "data.json") return;
-				if (this.externalReloadTimer != null) window.clearTimeout(this.externalReloadTimer);
-				this.externalReloadTimer = window.setTimeout(() => {
-					this.externalReloadTimer = null;
-					void this.adoptExternalData();
-				}, 300);
-			});
-			this.register(() => watcher.close());
+			const st = await this.app.vault.adapter.stat(this.dataPath());
+			if (!st) return;
+			const stamp = `${st.mtime}:${st.size}`;
+			const first = this.dataStamp === null;
+			if (stamp === this.dataStamp) return;
+			this.dataStamp = stamp;
+			if (!first) await this.adoptExternalData();
 		} catch {
-			/* watcher unavailable; onExternalSettingsChange still covers sync */
+			/* unreadable this moment (a sync mid-swap); the next tick tries again */
 		}
 	}
 
