@@ -3991,7 +3991,7 @@ class ReceiveShareModal extends Modal {
 		this.contentEl.empty();
 	}
 
-	/** "Shared/Steve" out of whatever the invite says, without letting a
+	/** "Shared/Dana" out of whatever the invite says, without letting a
 	 *  remote-supplied name choose a path this vault cannot write. */
 	private defaultFolder(owner: string, name: string): string {
 		const clean = sanitizeRemoteFolder(owner || name || "Shared notes");
@@ -5112,7 +5112,7 @@ class PconSettingTab extends PluginSettingTab {
 				build: (st) => {
 					st.addText((t) =>
 						t
-							.setPlaceholder("for example: Steve's Desktop")
+							.setPlaceholder("for example: Work laptop")
 							.setValue((this.app.loadLocalStorage("pcon-device-name") as string | null) ?? "")
 							.onChange((v) => this.app.saveLocalStorage("pcon-device-name", v.trim() || null))
 					);

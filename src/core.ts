@@ -5,7 +5,7 @@
 
 /** Build stamp shown in settings and logged on load. Must match
  *  manifest.json's version; tests enforce it. */
-export const PCON_BUILD = "1.15.18";
+export const PCON_BUILD = "1.15.19";
 
 /* ---------------- settings ---------------- */
 
@@ -164,7 +164,7 @@ export interface Subscription {
 	/** The content key, once an owner has approved this member. Empty while a
 	 *  request is still pending, which is a normal state and not a fault. */
 	key: string;
-	/** Vault folder the share lands in, e.g. "Shared/Steve". */
+	/** Vault folder the share lands in, e.g. "Shared/Dana". */
 	localPath: string;
 	addedAt: number;
 	paused: boolean;

@@ -81,9 +81,15 @@
 	border-top: 1px solid var(--background-modifier-border);
 }
 
+/* Obsidian only ever sets --setting-items-border-width to 0, so on current
+   builds its own rule already draws nothing; older ones down to the 1.8.7 floor
+   drew a border-top from a plain .setting-item rule at (0,1,0), which this
+   selector outweighs at (0,3,0). Between the variable and the specificity there
+   is nothing left for an override flag to do. */
 .pcon-modal .pcon-wiz-footer .setting-item {
-	border: none !important;
-	padding: 20px 0 4px !important;
+	--setting-items-border-width: 0;
+	border: none;
+	padding: 20px 0 4px;
 	margin: 0;
 }
 

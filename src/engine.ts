@@ -1002,7 +1002,7 @@ export class SyncEngine {
 	 *  short body is indistinguishable from success, the metadata still
 	 *  describes the whole file, so the write looked clean, and every later
 	 *  scan compared the truncated file against a hash that was never true of
-	 *  it and saw nothing to repair. Steve's vault lost the tail of two
+	 *  it and saw nothing to repair. A vault here lost the tail of two
 	 *  recordings that way, and kept them only because the conflict copy held
 	 *  the complete bytes.
 	 *
