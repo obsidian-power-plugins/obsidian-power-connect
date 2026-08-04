@@ -19,8 +19,8 @@ import {
 	freshStats,
 	normRel,
 	stripDeletes,
-} from "./core";
-import { EngineHost, JournalShape, PrepResult, RemoteIO, SyncEngine, VaultIO } from "./engine";
+} from "../src/core";
+import { EngineHost, JournalShape, PrepResult, RemoteIO, SyncEngine, VaultIO } from "../src/engine";
 
 /** Thrown by the fault injector to model the process dying mid-run. Once it
  *  fires, every further IO on that device also throws, so the run collapses

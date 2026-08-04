@@ -394,10 +394,13 @@ export interface SharePlan {
  *  instead of fighting. */
 /** Is this path the vault's configuration folder, or inside it?
  *
- *  The folder is only called `.obsidian` by default; a vault can be opened
- *  with any name, so the caller passes `Vault#configDir` and the literal here
- *  is a fallback for the pure callers (the tests) that have no vault. */
-export function inConfigFolder(path: string, configDir = ".obsidian"): boolean {
+ *  A vault's configuration folder can be renamed, so there is no default to
+ *  fall back on: the caller passes `Vault#configDir`, and the pure callers
+ *  (the tests) pass whatever folder they are simulating. */
+export function inConfigFolder(path: string, configDir: string | undefined): boolean {
+	// no vault in hand, which is the pure callers in the tests: there is no
+	// configuration folder to recognise, so nothing is skipped for being one
+	if (!configDir) return false;
 	return path === configDir || path.startsWith(`${configDir}/`);
 }
 

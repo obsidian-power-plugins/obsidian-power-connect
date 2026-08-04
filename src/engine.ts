@@ -948,7 +948,13 @@ export class SyncEngine {
 				});
 		}
 		for (const a of drops) if (a.t === "dropBase") this.baseMap.delete(a.key);
-		if (blockedErr) throw blockedErr;
+		if (blockedErr) {
+			// named as an Error on the way out: blockedErr is assigned inside a
+			// closure, so the compiler will not carry the guard above across to
+			// the throw on its own
+			const err: Error = blockedErr;
+			throw err;
+		}
 	}
 
 	/* ---------------- executors ---------------- */

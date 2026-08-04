@@ -962,10 +962,10 @@ export default class PowerConnectPlugin extends Plugin {
 		this.logRing.push({ ts: Date.now(), level, msg: text });
 		if (this.logRing.length > 500) this.logRing.splice(0, this.logRing.length - 500);
 		// The ring above is the log people actually read (Settings > View log).
-		// Errors always reach the console; routine chatter only when verbose
-		// logging is on, so a continuously running sync stays quiet in there.
-		if (level === "error") console.error(`[Power Connect] ${text}`);
-		else if (this.settings.verboseLog) console.log(`[Power Connect] ${text}`);
+		// Everything is in the plugin's own log either way; the console copy is
+		// for a bug report, so it follows the same switch rather than being on for
+		// everyone all the time.
+		if (this.settings.verboseLog) console.warn(`[Power Connect] ${text}`);
 		this.logChanged?.();
 	}
 
@@ -1067,7 +1067,7 @@ export default class PowerConnectPlugin extends Plugin {
 			if (r.status !== 200) throw new Error(`the link returned HTTP ${r.status}`);
 			return r.arrayBuffer;
 		}
-		const r = await fetch(url, { method: "GET" });
+		const r = await window.fetch(url, { method: "GET" });
 		if (!r.ok) throw new Error(`the link returned HTTP ${r.status}`);
 		return r.arrayBuffer();
 	}
@@ -3749,11 +3749,22 @@ class ShareContentsModal extends Modal {
 				b.setButtonText("Change").onClick(() => {
 					const next = normRel(this.homeEdit);
 					if (next === normRel(this.share.homePath)) return;
+					const move = () => {
+						this.share.homePath = next;
+						void this.commit();
+					};
 					// re-rooting renames every path inside the share, which to a
-					// recipient reads as a withdrawal and a fresh arrival
-					if (this.share.publishedAt && !confirm(`Moving the home folder renames every path inside this share. People receiving it will see the old paths disappear and the notes arrive again in a new place. Continue?`)) return;
-					this.share.homePath = next;
-					void this.commit();
+					// recipient reads as a withdrawal and a fresh arrival, so a
+					// published share asks first. The app's own modal, not the
+					// browser's confirm, which Obsidian's guidelines rule out.
+					if (!this.share.publishedAt) return move();
+					new ConfirmModal(
+						this.app,
+						"Move the home folder?",
+						"This renames every path inside the share. People receiving it will see the old paths disappear and the notes arrive again in a new place.",
+						"Move",
+						move
+					).open();
 				})
 			);
 

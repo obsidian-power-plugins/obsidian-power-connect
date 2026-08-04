@@ -12,7 +12,7 @@ async function transport(o: { url: string; method: string; contentType?: string;
 	if (!Platform.isMobileApp) {
 		return requestUrl({ url: o.url, method: o.method, headers, body: o.body, throw: false });
 	}
-	const res = await fetch(o.url, { method: o.method, headers, body: o.body });
+	const res = await window.fetch(o.url, { method: o.method, headers, body: o.body });
 	const buf = await res.arrayBuffer();
 	const h: Record<string, string> = {};
 	res.headers.forEach((v, k) => (h[k] = v));

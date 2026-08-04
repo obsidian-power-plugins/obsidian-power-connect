@@ -93,7 +93,7 @@ import {
 	pullShare,
 	resolveShareFiles,
 } from "../src/share";
-import { FakeServer, SimDevice, bytesOf, contentSurvives, converge, fleetDiff, mulberry32, textOf } from "../src/sim";
+import { FakeServer, SimDevice, bytesOf, contentSurvives, converge, fleetDiff, mulberry32, textOf } from "./sim";
 import manifest from "../manifest.json";
 import pkg from "../package.json";
 import versions from "../versions.json";
@@ -892,7 +892,8 @@ async function shareScenarios() {
 		const m = await seedShare(io, key, { "a.md": "alpha" });
 		const bad = (path: string, url?: string): ShareManifest => ({ ...m, files: [{ ...m.files[0], path, url: url ?? m.files[0].url }] });
 
-		eq(planSharePull(bad(".obsidian/plugins/x/main.js"), new Map(), emptyShareState()).actions.length, 0, "a share may not carry plugin code");
+		// the configuration folder is named by the caller, never assumed here
+		eq(planSharePull(bad(".obsidian/plugins/x/main.js"), new Map(), emptyShareState(), 0, ".obsidian").actions.length, 0, "a share may not carry plugin code");
 		eq(planSharePull(bad("../outside.md"), new Map(), emptyShareState()).actions.length, 0, "path traversal is refused");
 		eq(planSharePull(bad("a/b:c.md"), new Map(), emptyShareState()).actions[0]?.t, "unsafe", "a name Windows cannot write is reported, not attempted");
 		eq(planSharePull(bad("ok.md", "https://evil.example.com/x"), new Map(), emptyShareState()).actions[0]?.t, "unsafe", "a link to an unknown host is refused");
@@ -1137,7 +1138,9 @@ async function shareScenarios() {
 		const pagesOnly = resolveShareFiles({ homePath: "", attached: ["Meetings/2026-07-20.md", "Projects/Other/Secret.md"] }, all, hashes);
 		eq(pagesOnly.files.length, 2, "a share can be nothing but individual pages");
 
-		const config = resolveShareFiles({ homePath: "", attached: [".obsidian/plugins/x/data.json"] }, all, hashes);
+		// the folder is named here rather than assumed by the code under test, which
+		// is the point: a vault can call its configuration folder anything
+		const config = resolveShareFiles({ homePath: "", attached: [".obsidian/plugins/x/data.json"] }, all, hashes, 0, ".obsidian");
 		eq(config.files.length, 0, "plugin settings can never be attached to a share");
 		eq(config.skipped.length, 1, "and the refusal is reported, not silent");
 

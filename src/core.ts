@@ -5,7 +5,7 @@
 
 /** Build stamp shown in settings and logged on load. Must match
  *  manifest.json's version; tests enforce it. */
-export const PCON_BUILD = "1.15.19";
+export const PCON_BUILD = "1.15.20";
 
 /* ---------------- settings ---------------- */
 
@@ -404,7 +404,9 @@ export function junkFile(rel: string): boolean {
  *  rejects is skipped with a log line instead of crashing the sync. */
 export function windowsUnsafe(rel: string): string | null {
 	for (const seg of rel.split("/")) {
-		const bad = seg.match(/[<>:"|?*\u0000-\u001f]/);
+		const ctrl = [...seg].find((c) => c.charCodeAt(0) <= 0x1f);
+		if (ctrl) return "name contains a control character";
+		const bad = seg.match(/[<>:"|?*]/);
 		if (bad) return `name contains "${bad[0]}"`;
 		if (/[. ]$/.test(seg)) return "name ends with a dot or space";
 		const stem = (seg.split(".")[0] || "").toUpperCase();
