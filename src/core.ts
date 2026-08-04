@@ -5,7 +5,7 @@
 
 /** Build stamp shown in settings and logged on load. Must match
  *  manifest.json's version; tests enforce it. */
-export const PCON_BUILD = "1.15.16";
+export const PCON_BUILD = "1.15.18";
 
 /* ---------------- settings ---------------- */
 

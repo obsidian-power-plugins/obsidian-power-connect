@@ -156,6 +156,18 @@ Which endpoints are used depends on the provider you choose:
 
 **Credentials never sync.** Access and refresh tokens, the connected account's email, and the encryption passphrase are held in Obsidian's per-device local storage, and are stripped out of `data.json` before it is written. A `data.json` that travels to another device by any means carries no sign-in with it.
 
+### What the catalog's scan reports
+
+The community catalog scans a plugin for what it is *capable* of, which is not the same as what it does with it. Power Connect reports three things.
+
+| What the scan reports | What it is | Where |
+| --- | --- | --- |
+| **Vault enumeration** | Listing your files with their sizes and modification times, which is the whole of how a sync plugin decides what changed. Nothing reads a file's *contents* because it appeared in that list; a file is only opened when it is actually being uploaded. | [`src/main.ts`](src/main.ts), the manifest and share builders |
+| **Clipboard access** | **Writing:** four **Copy** buttons, for the pairing code, the invite code, the request code, and the recovery text. **Reading:** three **Paste** buttons sitting beside the fields those codes go into, so you can move a code between two devices without retyping it. All seven are a button you just pressed. | [`src/main.ts`](src/main.ts), the setup and pairing panels |
+| **Local network listener** | Google Drive sign-in only. OAuth for a desktop app returns its result to a loopback address, so a server binds to `127.0.0.1` on an ephemeral port, catches the one redirect, and closes. It is bound to the loopback interface rather than to all of them, so nothing outside your machine can reach it, it uses PKCE, and a five-minute timer closes it whether or not the sign-in finishes. Dropbox and OneDrive do not use it at all. | [`src/gdrive.ts`](src/gdrive.ts) `gdriveSignIn` |
+
+Two `fetch` calls appear in the built `main.js` alongside the plugin's `requestUrl` ones. Both are the **mobile** branch of a single request helper, where the desktop branch calls `requestUrl`; they go to the same provider endpoints listed above. There is no `eval`, no `Function` constructor, no `innerHTML`, no code fetched and run at runtime, and no processes started.
+
 With end-to-end encryption on, file **contents** are encrypted in your vault before upload (AES-256-GCM, key derived from your passphrase with PBKDF2), so the provider stores bytes it cannot read. File and folder **names are not encrypted**: your vault's structure is still visible to the provider, and only what is inside each file is hidden.
 
 ## License
