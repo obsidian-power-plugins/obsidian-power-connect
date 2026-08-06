@@ -33,6 +33,7 @@ if (prod) {
 	await ctx.rebuild();
 	await ctx.dispose();
 	await import("./check-bundle.mjs");
+	await import("./check-icons.mjs");
 	process.exit(0);
 } else {
 	await ctx.watch();
