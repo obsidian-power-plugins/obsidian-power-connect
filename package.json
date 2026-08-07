@@ -1,6 +1,6 @@
 {
 	"name": "powerconnect",
-	"version": "1.15.20",
+	"version": "1.15.21",
 	"description": "Obsidian plugin: sync your vault to your own Dropbox, OneDrive, or Google Drive with optional end-to-end encryption",
 	"main": "main.js",
 	"type": "module",
