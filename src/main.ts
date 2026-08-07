@@ -4323,6 +4323,16 @@ class PconSettingTab extends PluginSettingTab {
 		head.createSpan({ cls: "pcon-about-name", text: this.plugin.manifest.name });
 		head.createSpan({ cls: "pcon-about-version", text: "v" + this.plugin.manifest.version });
 		el.createDiv({ cls: "pcon-about-desc", text: this.plugin.manifest.description });
+		// One Buy Me a Coffee page serves every Power Plugin, and a payment says
+		// nothing about which one it came from. The note that rides along does, so
+		// the ask is to name the plugin in it. The name is read from the manifest
+		// rather than written out here, so it cannot drift from what the plugin is
+		// actually called.
+		const support = el.createDiv({ cls: "pcon-about-support" });
+		support.createEl("a", { text: "Buy me a coffee", href: "https://buymeacoffee.com/powerplugins" });
+		support.createSpan({
+			text: `. One page covers every Power Plugin, so mention ${this.plugin.manifest.name} in the note and I will know which one to keep working on.`,
+		});
 	}
 
 	/** The master switch: on and off, above the sections rather than inside one. */
