@@ -86,6 +86,32 @@ export interface PconSettings {
 	/** Mark shared items in the file list. Off is for people who want a quiet
 	 *  sidebar; nothing about sharing depends on it. */
 	shareMarks: boolean;
+	/** Carry the ribbon between devices. Obsidian keeps it in workspace.json,
+	 *  which is per-device by design and never syncs, so the ribbon travels
+	 *  here instead. Only meaningful with syncConfig on: a vault that has said
+	 *  its Obsidian settings stay put means the ribbon too. */
+	syncRibbon: boolean;
+	/** The shared ribbon, desktop and mobile kept apart. Obsidian already files
+	 *  them separately (workspace.json and workspace-mobile.json) because a
+	 *  phone's ribbon is not the same shape as a laptop's. */
+	ribbon: RibbonItem[];
+	ribbonMobile: RibbonItem[];
+}
+
+/**
+ * One icon in the left ribbon: the id Obsidian knows it by, and whether it is
+ * hidden.
+ *
+ * A list rather than a map, and not only for readability. Position in the list
+ * IS the icon's position in the ribbon, and mergeForSave merges a map key by
+ * key: a device that reordered its ribbon without hiding or showing anything
+ * changed no key's value, so every entry would read as unchanged and the
+ * reorder would be dropped on the way to disk. A list is one whole value, which
+ * is what a ribbon is.
+ */
+export interface RibbonItem {
+	id: string;
+	hidden: boolean;
 }
 
 /** One person a share has been offered to, and where they stand. */
@@ -210,7 +236,66 @@ export const DEFAULT_SETTINGS: PconSettings = {
 	subscriptions: [],
 	shares: [],
 	shareMarks: true,
+	syncRibbon: true,
+	ribbon: [],
+	ribbonMobile: [],
 };
+
+/* ---------------- ribbon ---------------- */
+
+/**
+ * One ribbon laid over another, icon by icon.
+ *
+ * `primary` decides the order, and the shown-or-hidden state, of every icon it
+ * knows about. Icons only `secondary` has are kept, in the place they hold
+ * there: directly after the last icon the two sides agree on. That is what
+ * stops a plugin installed on one device only from being swept to the end of
+ * its ribbon every time the other device syncs.
+ *
+ * Used in both directions. Taking another device's ribbon, `primary` is the
+ * shared copy and the local-only icons are the ones being placed; sharing this
+ * device's, they swap, and it is the other devices' icons that hold their spot.
+ */
+export function weaveRibbon(primary: RibbonItem[], secondary: RibbonItem[]): RibbonItem[] {
+	const known = new Set(primary.map((i) => i.id));
+	const head: RibbonItem[] = []; // secondary-only, ahead of anything shared
+	const after = new Map<string, RibbonItem[]>();
+	let anchor: string | null = null;
+	for (const item of secondary) {
+		if (known.has(item.id)) {
+			anchor = item.id;
+			continue;
+		}
+		if (anchor === null) head.push(item);
+		else {
+			const list = after.get(anchor);
+			if (list) list.push(item);
+			else after.set(anchor, [item]);
+		}
+	}
+	const out: RibbonItem[] = [];
+	const placed = new Set<string>();
+	const take = (item: RibbonItem) => {
+		// a duplicate id would make Obsidian's own sort ambiguous; first wins
+		if (placed.has(item.id)) return;
+		placed.add(item.id);
+		out.push(item);
+	};
+	for (const item of head) take(item);
+	for (const item of primary) {
+		take(item);
+		for (const extra of after.get(item.id) ?? []) take(extra);
+	}
+	return out;
+}
+
+/** Same icons, same order, same states. Order is compared because order is
+ *  half of what a ribbon is; a set comparison would call a drag no change. */
+export function ribbonEqual(a: RibbonItem[], b: RibbonItem[]): boolean {
+	if (a.length !== b.length) return false;
+	for (let i = 0; i < a.length; i++) if (a[i].id !== b[i].id || a[i].hidden !== b[i].hidden) return false;
+	return true;
+}
 
 /** Merge our in-memory settings over what is on disk, letting disk win for
  *  every key we did not change since `baseline`. data.json can be synced

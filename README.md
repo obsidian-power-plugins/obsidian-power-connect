@@ -48,6 +48,7 @@ On start, the moment Obsidian comes back into view, after your edits settle, on 
 - **Device-only excludes** keep a lean phone against a full desktop.
 - **Skip files larger than N MB.** Lowering the cap never deletes anything already synced.
 - **Sync Obsidian settings** (on by default) carries themes, snippets, and your plugins, which is how a plugin update on one device reaches the rest. Workspace layouts stay per device.
+- **Include the ribbon** (on by default) gives every device the same icons in the left ribbon, in the same order. Obsidian keeps the ribbon in `workspace.json` next to your open tabs and pane layout, which is exactly why that file stays per device, so the ribbon alone travels separately. Desktop and mobile keep their own.
 
 Plugin settings files often hold API keys, so they only travel encrypted. Without encryption or plugin settings protection they are held back, and the log says so.
 

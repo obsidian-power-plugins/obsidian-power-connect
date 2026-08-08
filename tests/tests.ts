@@ -8,6 +8,9 @@ import {
 	PCON_BUILD,
 	Plan,
 	RemoteEntry,
+	RibbonItem,
+	ribbonEqual,
+	weaveRibbon,
 	asciiJsonHeader,
 	assertWholeDownload,
 	isShortRead,
@@ -483,6 +486,57 @@ console.log("mergeForSave");
 		{ map: { A: [7] } },
 		"an entry we did not touch takes the disk's"
 	);
+}
+
+/* ---------- the ribbon ---------- */
+
+console.log("ribbon");
+{
+	const r = (spec: string): RibbonItem[] => spec.split(" ").filter(Boolean).map((s) => ({ id: s.replace(/^-/, ""), hidden: s.startsWith("-") }));
+	const spec = (items: RibbonItem[]): string => items.map((i) => (i.hidden ? "-" : "") + i.id).join(" ");
+
+	ok(ribbonEqual(r("a b c"), r("a b c")), "the same ribbon is the same ribbon");
+	ok(!ribbonEqual(r("a b c"), r("a -b c")), "hiding an icon is a change");
+	ok(!ribbonEqual(r("a b c"), r("b a c")), "so is dragging one, which a set comparison would miss");
+	ok(!ribbonEqual(r("a b"), r("a b c")), "and so is gaining one");
+
+	// The whole point: one device's ribbon, put on another device.
+	eq(spec(weaveRibbon(r("c -a b"), r("a b c"))), "c -a b", "a shared ribbon replaces the local order and states");
+
+	// A plugin installed on one device only. Its icon must not be swept to the
+	// end of the ribbon every time the other device syncs.
+	eq(spec(weaveRibbon(r("a b c"), r("a mine b c"))), "a mine b c", "a local-only icon holds its place after the icon it follows");
+	eq(spec(weaveRibbon(r("a b c"), r("mine a b c"))), "mine a b c", "one that leads the ribbon stays at the front");
+	eq(spec(weaveRibbon(r("a b c"), r("a b c mine"))), "a b c mine", "one that trails it stays at the back");
+	eq(spec(weaveRibbon(r("a b c"), r("a -mine b c"))), "a -mine b c", "and keeps the state it has here, which the other device knows nothing about");
+
+	// Sharing this device's ribbon: the same weave, the other way round, so an
+	// icon only the other devices have is not dropped by the one that lacks it.
+	eq(spec(weaveRibbon(r("-b a"), r("a theirs b"))), "-b a theirs", "sharing keeps an icon this device does not have");
+
+	// Round trip: adopt, then share back, and nothing moves. A device that
+	// drifted here would rewrite its ribbon on every pass forever.
+	const shared = r("c -a b theirs");
+	const local = r("a b c mine");
+	const here = new Set(local.map((i) => i.id));
+	const applied = weaveRibbon(shared, local).filter((i) => here.has(i.id));
+	// `mine` sits after `c` here, so it travels with `c` rather than staying at
+	// the end: it holds its place relative to the icon it follows, not its index.
+	eq(spec(applied), "c mine -a b", "what actually lands: the shared order, minus what is not installed here");
+	eq(spec(weaveRibbon(applied, shared)), "c mine -a b theirs", "sharing it back keeps the absent icon");
+	const second = weaveRibbon(weaveRibbon(applied, shared), applied).filter((i) => here.has(i.id));
+	ok(ribbonEqual(second, applied), "and a second pass is a no-op, so devices settle instead of taking turns");
+
+	// mergeForSave has to see the ribbon as one value. As a map it would merge
+	// key by key: a pure reorder changes no key's value, so every entry would
+	// read as untouched and the drag would never reach the file.
+	type S = { ribbon: RibbonItem[] };
+	eq(
+		mergeForSave({ ribbon: r("b a") } as S, { ribbon: r("a b") } as S, { ribbon: r("a b") } as S),
+		{ ribbon: r("b a") },
+		"a reorder with no state change still reaches disk"
+	);
+	eq(mergeForSave({ ribbon: r("a b") } as S, { ribbon: r("a b") } as S, { ribbon: r("c a b") } as S), { ribbon: r("c a b") }, "a ribbon we did not touch takes the other device's");
 }
 
 /* ---------- the planner ---------- */

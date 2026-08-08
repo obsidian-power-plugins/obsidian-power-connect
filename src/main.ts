@@ -12,6 +12,7 @@ import {
 	PconSettings,
 	Plan,
 	RemoteEntry,
+	RibbonItem,
 	SyncBlocked,
 	BatchCommit,
 	backoffMs,
@@ -37,9 +38,11 @@ import {
 	pathParent,
 	pkceChallenge,
 	randB64url,
+	ribbonEqual,
 	sanitizeRemoteFolder,
 	statsSummary,
 	stripDeletes,
+	weaveRibbon,
 	windowsUnsafe,
 	ShareMember,
 	Subscription,
@@ -138,6 +141,28 @@ interface MenuItemLike {
 	onClick(cb: () => void): MenuItemLike;
 }
 
+/**
+ * The slice of Obsidian's left ribbon this plugin reads and writes.
+ *
+ * None of it is in the published API. The ribbon's contents are workspace
+ * state, and the only supported way to change them is the user right-clicking
+ * the ribbon, so a plugin that carries the ribbon between devices has to go
+ * through the same object Obsidian's own settings page does. Everything here
+ * is therefore optional and feature-detected at the call: on a build that has
+ * moved any of it, ribbon syncing quietly does nothing and the rest of the
+ * plugin neither knows nor cares.
+ *
+ * `load` sets each item's hidden flag from the map and then sorts the items
+ * into the map's key order, which is why the order of a plain object matters
+ * here and why RibbonItem is a list. `onChange(true)` re-renders and asks the
+ * workspace to save, which is what puts the result in workspace.json.
+ */
+interface LeftRibbonLike {
+	serialize?: () => { hiddenItems?: Record<string, boolean> } | null;
+	load?: (data: { hiddenItems: Record<string, boolean> }) => void;
+	onChange?: (save: boolean) => void;
+}
+
 class FolderSuggest extends AbstractInputSuggest<TFolder> {
 	/** When true, keep the picked folder's path in the field instead of clearing
 	 *  it; the exclude-a-folder flow clears, the protect-a-folder flow keeps. */
@@ -189,6 +214,11 @@ export default class PowerConnectPlugin extends Plugin {
 	 *  tell a file someone else wrote from one nobody touched, without reading
 	 *  it; see watchDataFile(). */
 	private dataStamp: string | null = null;
+	/** The ribbon as this device last agreed it, so a later difference is the
+	 *  user having changed it here. Null until the first apply has run, which
+	 *  is what keeps the watcher from pushing a ribbon we have not yet had the
+	 *  chance to take another device's version of. */
+	private ribbonSnapshot: RibbonItem[] | null = null;
 
 	/* journal file bookkeeping; the maps themselves live in the engine */
 	lastSyncMs = 0;
@@ -524,8 +554,12 @@ export default class PowerConnectPlugin extends Plugin {
 
 		this.addSettingTab(new PconSettingTab(this.app, this));
 		this.watchDataFile();
+		this.watchRibbon();
 		this.scheduleAuto();
 		this.app.workspace.onLayoutReady(() => {
+			// every plugin has registered its ribbon icons by now, so this is the
+			// first moment the ribbon can be read as the whole thing it is
+			this.applyRibbon();
 			// first run (or a new device that received settings without its own
 			// sign-in): open the guided setup once; the status bar and settings
 			// keep an entry point after it is dismissed
@@ -779,6 +813,121 @@ export default class PowerConnectPlugin extends Plugin {
 		this.registerDomEvent(window, "focus", () => void this.checkDataFile());
 	}
 
+	/* ---------------- ribbon ---------------- */
+
+	/** Whether the ribbon is ours to carry at all. It rides in this plugin's own
+	 *  data.json, which syncs whatever the config setting says, so the gate is
+	 *  explicit: a vault that holds its Obsidian settings back means the ribbon
+	 *  too. */
+	private ribbonSyncOn(): boolean {
+		return this.settings.syncConfig && this.settings.syncRibbon;
+	}
+
+	/** Desktop and mobile each keep their own. Obsidian splits them already,
+	 *  between workspace.json and workspace-mobile.json, and for the same
+	 *  reason: a phone's ribbon is not a laptop's with fewer icons. */
+	private ribbonKey(): "ribbon" | "ribbonMobile" {
+		return Platform.isMobile ? "ribbonMobile" : "ribbon";
+	}
+
+	private leftRibbon(): LeftRibbonLike | null {
+		return (this.app.workspace as unknown as { leftRibbon?: LeftRibbonLike }).leftRibbon ?? null;
+	}
+
+	/** The ribbon Obsidian is showing right now, or null on a build that keeps
+	 *  it somewhere this cannot see. */
+	private readRibbon(): RibbonItem[] | null {
+		const r = this.leftRibbon();
+		if (typeof r?.serialize !== "function") return null;
+		let map: Record<string, boolean> | null | undefined;
+		try {
+			map = r.serialize()?.hiddenItems;
+		} catch {
+			return null;
+		}
+		if (!map || typeof map !== "object") return null;
+		return Object.keys(map).map((id) => ({ id, hidden: !!map[id] }));
+	}
+
+	/** Put a ribbon on screen and into workspace.json. False when this build
+	 *  will not take it, which is the signal to leave the whole feature alone. */
+	private writeRibbon(items: RibbonItem[]): boolean {
+		const r = this.leftRibbon();
+		if (typeof r?.load !== "function") return false;
+		const hiddenItems: Record<string, boolean> = {};
+		for (const item of items) hiddenItems[item.id] = item.hidden;
+		try {
+			r.load({ hiddenItems });
+			// load() renders but does not save; this is what reaches the file
+			r.onChange?.(true);
+		} catch {
+			return false;
+		}
+		return true;
+	}
+
+	/**
+	 * Take the shared ribbon onto this device, or set it from here the first time.
+	 *
+	 * Runs once the layout is ready, because every plugin has registered its
+	 * icons by then and a ribbon read before that is missing half of itself, and
+	 * again whenever another device's settings land. Idempotent: when the two
+	 * sides already agree it writes nothing, which is what lets the watcher below
+	 * treat any difference as the user's own doing.
+	 *
+	 * Icons this device does not have (a plugin installed only on the other one)
+	 * stay in the shared copy but are dropped from what is handed to Obsidian, so
+	 * a device missing a plugin does not rewrite its workspace on every pass.
+	 */
+	applyRibbon() {
+		if (!this.ribbonSyncOn() || !this.app.workspace.layoutReady) return;
+		const local = this.readRibbon();
+		if (!local) return;
+		const shared = this.settings[this.ribbonKey()];
+		if (!shared.length) {
+			// nothing has ever been shared: this device's ribbon is the first word
+			this.settings[this.ribbonKey()] = local;
+			this.ribbonSnapshot = local;
+			this.queueSave();
+			return;
+		}
+		const here = new Set(local.map((i) => i.id));
+		const target = weaveRibbon(shared, local).filter((i) => here.has(i.id));
+		if (ribbonEqual(target, local)) {
+			this.ribbonSnapshot = local;
+			return;
+		}
+		if (!this.writeRibbon(target)) return; // snapshot stays null; the watcher stays off
+		this.ribbonSnapshot = target;
+		this.log("info", "Ribbon updated from another device.");
+	}
+
+	/**
+	 * Notice the ribbon being changed on this device, and share it.
+	 *
+	 * Obsidian fires no event for it. Hiding an icon or dragging one calls the
+	 * ribbon's own onChange, which re-renders and asks the workspace to save, and
+	 * nothing along that path is observable from a plugin. So the ribbon is
+	 * compared against the last one this device agreed on, on the same cheap poll
+	 * the data.json watcher already runs: it is a couple of dozen ids and two
+	 * string compares each.
+	 */
+	private captureRibbon() {
+		if (!this.ribbonSyncOn() || !this.ribbonSnapshot) return;
+		const local = this.readRibbon();
+		if (!local || ribbonEqual(local, this.ribbonSnapshot)) return;
+		this.ribbonSnapshot = local;
+		// icons only the other devices have keep their place rather than being
+		// dropped from the shared copy by a device that never had them
+		this.settings[this.ribbonKey()] = weaveRibbon(local, this.settings[this.ribbonKey()]);
+		this.queueSave();
+		this.log("debug", "Ribbon changed on this device; sharing it.");
+	}
+
+	private watchRibbon() {
+		this.registerInterval(window.setInterval(() => this.captureRibbon(), 5000));
+	}
+
 	private async checkDataFile() {
 		if (this.busySaving()) return; // our own write is on its way; let it land
 		try {
@@ -818,6 +967,8 @@ export default class PowerConnectPlugin extends Plugin {
 		this.scheduleAuto();
 		this.startLongpoll();
 		this.refreshIdleStatus();
+		// settings that just arrived from another device may carry its ribbon
+		this.applyRibbon();
 	}
 
 	/* ---------------- journal ---------------- */
@@ -5017,7 +5168,7 @@ class PconSettingTab extends PluginSettingTab {
 				// only `.obsidian` by default
 				name: `Sync Obsidian settings (${this.plugin.app.vault.configDir})`,
 				desc: "Themes, snippets, app settings, plugin list, and plugin code.",
-				help: "Workspace layout files stay excluded (each device keeps its own open tabs). Plugin settings files (data.json) are excluded by default because plugins routinely keep API keys in them; the toggle below opts them in. Power Connect itself travels like any other plugin, so an update here reaches your other devices; its journal never syncs, and its own settings file always does (it holds no credentials).",
+				help: "Workspace layout files stay excluded (each device keeps its own open tabs); the ribbon is the one part of them that can travel, and the toggle below carries it. Plugin settings files (data.json) are excluded by default because plugins routinely keep API keys in them; another toggle below opts them in. Power Connect itself travels like any other plugin, so an update here reaches your other devices; its journal never syncs, and its own settings file always does (it holds no credentials).",
 				build: (st) => {
 					st.addToggle((t) =>
 						t.setValue(s.syncConfig).onChange((v) => {
@@ -5031,6 +5182,20 @@ class PconSettingTab extends PluginSettingTab {
 			},
 		];
 		if (s.syncConfig) {
+			limits.push({
+				name: "Include the ribbon",
+				desc: "Show the same icons in the left ribbon, in the same order, on every device.",
+				help: "Obsidian keeps the ribbon inside workspace.json, alongside your open tabs and pane layout, and that file stays per-device on purpose: syncing it whole would push one machine's window layout onto the others and start a conflict every time either one moved a pane. So the ribbon alone travels in Power Connect's own settings instead. Desktop and mobile keep separate ribbons. The first device to run after you turn this on sets the shared ribbon and the others adopt it; after that, a change on any device reaches the rest. An icon belonging to a plugin one device does not have keeps its place on the devices that do.",
+				build: (st) => {
+					st.addToggle((t) =>
+						t.setValue(s.syncRibbon).onChange((v) => {
+							s.syncRibbon = v;
+							save();
+							this.plugin.applySettings();
+						})
+					);
+				},
+			});
 			limits.push({
 				name: "Include plugin settings files",
 				desc: "Sync every plugin's data.json too. They routinely hold API keys, so they travel only under encryption: a fully encrypted folder, or plugin settings protection chosen in the guided setup. Without either, they are held back and the sync log says so.",
