@@ -109,6 +109,10 @@ export interface RemoteIO {
 /** Everything else the engine needs to know about where it is running. */
 export interface EngineHost {
 	settings(): PconSettings;
+	/** Effective worker count for this device. The Obsidian host lowers this on
+	 *  phones so a catch-up cannot monopolize the webview with parallel writes;
+	 *  simulations and other hosts fall back to the saved setting. */
+	concurrency?(): number;
 	configDir(): string;
 	pluginFolderName(): string;
 	vaultName(): string;
@@ -777,7 +781,7 @@ export class SyncEngine {
 			}
 			tick();
 		};
-		const conc = Math.max(1, this.host.settings().concurrency);
+		const conc = Math.max(1, this.host.concurrency?.() ?? this.host.settings().concurrency);
 		const batching = !!(this.remote.uploadStart && this.remote.uploadFinishBatch);
 		// Plugin code, then plugin settings, then the rest of the config folder,
 		// then notes: a joining device becomes a working Obsidian early instead

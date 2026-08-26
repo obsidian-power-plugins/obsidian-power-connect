@@ -245,6 +245,11 @@ export default class PowerConnectPlugin extends Plugin {
 	private deleteHoldNoticed = false;
 	private blockedNoticed = false;
 	private lastResumeKick = 0;
+	/** True until the delayed phone catch-up has had its turn. Other Power
+	 *  plugins read this to postpone vault-wide indexes and repaints until the
+	 *  files they would inspect have finished arriving. */
+	mobileStartupPending = Platform.isMobileApp;
+	private mobileStartupTimer: number | null = null;
 	/** Longpoll generation: bumping it retires any loop still awaiting. */
 	private lpGen = 0;
 	private lpTimer: number | null = null;
@@ -350,6 +355,10 @@ export default class PowerConnectPlugin extends Plugin {
 	engine: SyncEngine = new SyncEngine(
 		{
 			settings: () => this.settings,
+			// Parallel transfers are excellent on desktop. On iOS every downloaded
+			// file also wakes Obsidian's index and view layer in the same webview;
+			// serial writes keep taps and scrolling responsive during catch-up.
+			concurrency: () => (Platform.isMobileApp ? 1 : this.settings.concurrency),
 			configDir: () => this.app.vault.configDir,
 			pluginFolderName: () => this.pluginDirName(),
 			vaultName: () => this.app.vault.getName(),
@@ -568,13 +577,17 @@ export default class PowerConnectPlugin extends Plugin {
 			if (!this.remote.connected && !this.hasShares && this.app.loadLocalStorage("pcon-setup-dismissed") !== "1") {
 				new SetupWizard(this.app, this).open();
 			}
-			if (this.settings.syncOnStart && this.remote.connected) {
-				window.setTimeout(() => void this.syncNow("startup", false), 4000);
-			}
-			if (this.settings.syncOnStart && this.hasShares) {
-				// after the vault sync, so a share landing in a synced folder
-				// does not race the run that is already scanning it
-				window.setTimeout(() => void this.pullShares("startup", false), this.remote.connected ? 20_000 : 5000);
+			if (Platform.isMobileApp) this.scheduleMobileStartupCatchup();
+			else {
+				this.mobileStartupPending = false;
+				if (this.settings.syncOnStart && this.remote.connected) {
+					window.setTimeout(() => void this.syncNow("startup", false), 4000);
+				}
+				if (this.settings.syncOnStart && this.hasShares) {
+					// after the vault sync, so a share landing in a synced folder
+					// does not race the run that is already scanning it
+					window.setTimeout(() => void this.pullShares("startup", false), this.remote.connected ? 20_000 : 5000);
+				}
 			}
 			this.startLongpoll();
 			this.refreshShareMarks();
@@ -592,11 +605,36 @@ export default class PowerConnectPlugin extends Plugin {
 		}
 		if (this.watchTimer != null) window.clearTimeout(this.watchTimer);
 		if (this.autoTimer != null) window.clearInterval(this.autoTimer);
+		if (this.mobileStartupTimer != null) window.clearTimeout(this.mobileStartupTimer);
+	}
+
+	/** A phone opens onto the last local snapshot immediately. Catch-up waits
+	 *  until the first interaction/layout burst has settled, then runs serially
+	 *  in the background. Desktop keeps its shorter eager schedule. */
+	private scheduleMobileStartupCatchup() {
+		if (!this.mobileStartupPending) return;
+		const hasWork = this.settings.syncOnStart && (this.remote.connected || this.hasShares);
+		if (!hasWork) {
+			this.mobileStartupPending = false;
+			return;
+		}
+		this.mobileStartupTimer = window.setTimeout(() => {
+			this.mobileStartupTimer = null;
+			void (async () => {
+				try {
+					if (this.remote.connected) await this.syncNow("startup", false);
+					if (this.hasShares) await this.pullShares("startup", false);
+				} finally {
+					this.mobileStartupPending = false;
+				}
+			})();
+		}, 12_000);
 	}
 
 	/** A debounced nudge when Obsidian comes back into view: skip when a
 	 *  sync just ran or a kick is already pending, then catch up. */
 	private maybeResumeSync() {
+		if (Platform.isMobileApp && this.mobileStartupPending) return;
 		if (!this.settings.syncOnResume || !this.remote.connected || this.paused || this.running) return;
 		const now = Date.now();
 		if (now - this.lastResumeKick < 15_000 || now - this.lastSyncMs < 20_000) return;
@@ -607,7 +645,19 @@ export default class PowerConnectPlugin extends Plugin {
 		// re-arms the backoff
 		this.failStreak = 0;
 		this.nextAutoOkMs = 0;
-		window.setTimeout(() => void this.syncNow("resume", false), Platform.isMobileApp ? 2500 : 800);
+		if (Platform.isMobileApp) {
+			// Returning to a suspended phone app has the same interaction burst as a
+			// cold launch. Let the current note become usable before catch-up begins.
+			this.mobileStartupPending = true;
+			this.mobileStartupTimer = window.setTimeout(() => {
+				this.mobileStartupTimer = null;
+				void this.syncNow("resume", false).finally(() => {
+					this.mobileStartupPending = false;
+				});
+			}, 8000);
+			return;
+		}
+		window.setTimeout(() => void this.syncNow("resume", false), 800);
 	}
 
 	/* ---------------- live sync (desktop longpoll) ---------------- */
@@ -1141,6 +1191,10 @@ export default class PowerConnectPlugin extends Plugin {
 	}
 
 	private notify(text: string, level: "all" | "changes" | "errors", timeout = 6000) {
+		// Automatic success/churn notices are useful beside a desktop status bar,
+		// but on a phone they cover the document the sync is meant to update.
+		// Manual syncs use their own explicit notice; background errors stay loud.
+		if (Platform.isMobileApp && level !== "errors") return;
 		const rank = { errors: 0, changes: 1, all: 2 } as const;
 		if (rank[level] <= rank[this.settings.notices]) new Notice(text, timeout);
 	}
@@ -1151,14 +1205,20 @@ export default class PowerConnectPlugin extends Plugin {
 		this.echo.set(normKey(rel), Date.now() + 4000);
 	}
 
-	private suppressed(rel: string): boolean {
-		const until = this.echo.get(normKey(rel));
+	/** Whether this path is being written by a remote apply right now. Sibling
+	 *  plugins use this to avoid treating a downloaded note like a local edit
+	 *  (for example, recalculating every table in a large catch-up). */
+	isApplyingRemote(rel: string): boolean {
+		const key = normKey(rel);
+		const until = this.echo.get(key);
 		if (!until) return false;
-		if (Date.now() > until) {
-			this.echo.delete(normKey(rel));
-			return false;
-		}
-		return true;
+		if (Date.now() <= until) return true;
+		this.echo.delete(key);
+		return false;
+	}
+
+	private suppressed(rel: string): boolean {
+		return this.isApplyingRemote(rel);
 	}
 
 	/** Files touched since the last completed sync, for the backgrounding
@@ -1170,6 +1230,10 @@ export default class PowerConnectPlugin extends Plugin {
 		if (this.suppressed(rel) || !this.remote.connected || this.paused) return;
 		if (junkFile(rel) || isIgnored(rel, this.igCache)) return;
 		this.dirty.add(rel);
+		// The delayed startup catch-up will include this edit. Starting a second
+		// full scan three seconds after the first tap would defeat the phone's
+		// launch grace and then queue another run behind it.
+		if (Platform.isMobileApp && this.mobileStartupPending) return;
 		if (this.settings.watchSeconds <= 0) return;
 		if (this.watchTimer != null) window.clearTimeout(this.watchTimer);
 		// the shared setting is tuned for desktop typing sessions; a phone
@@ -1786,6 +1850,13 @@ export default class PowerConnectPlugin extends Plugin {
 		if (!this.remote.connected) {
 			if (interactive) new Notice("Power Connect: connect Dropbox in settings first.");
 			return;
+		}
+		if (interactive && Platform.isMobileApp && this.mobileStartupPending) {
+			// A deliberate Sync now supersedes the launch/resume timer. Without this,
+			// the delayed catch-up would immediately queue an identical second scan.
+			if (this.mobileStartupTimer != null) window.clearTimeout(this.mobileStartupTimer);
+			this.mobileStartupTimer = null;
+			this.mobileStartupPending = false;
 		}
 		if (this.running) {
 			this.pendingRun = true;
