@@ -1,4 +1,14 @@
-import { AbstractInputSuggest, App, ButtonComponent, ItemView, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, type SettingDefinitionItem, type SettingDefinitionPage, type SettingDefinitionRender, SliderComponent, TFile, TFolder, WorkspaceLeaf, requestUrl, setIcon } from "obsidian";
+import { AbstractInputSuggest, App, ButtonComponent, ItemView, Modal, Notice as ObsidianNotice, Platform, Plugin, PluginSettingTab, Setting, type SettingDefinitionItem, type SettingDefinitionPage, type SettingDefinitionRender, SliderComponent, TFile, TFolder, WorkspaceLeaf, requestUrl, setIcon } from "obsidian";
+
+let pluginNoticesEnabled = () => true;
+
+class Notice extends ObsidianNotice {
+	constructor(message: string | DocumentFragment, duration?: number) {
+		super(message, duration);
+		if (!pluginNoticesEnabled()) this.hide();
+	}
+}
+
 import {
 	Action,
 	BaseEntry,
@@ -405,6 +415,7 @@ export default class PowerConnectPlugin extends Plugin {
 		// the renderer down too fast for the write to finish; see takePending()
 		const pending = this.takePending(this.stripSecrets(file));
 		this.adoptSettings(pending ?? onDisk);
+		pluginNoticesEnabled = () => this.settings.notices !== "off";
 		const f = file;
 		const fileHasSecrets = !!f && SECRET_KEYS.some((k) => f[k] != null && f[k] !== "" && f[k] !== 0);
 		// upgrade path: secrets found in data.json move into localStorage once,
@@ -1195,7 +1206,7 @@ export default class PowerConnectPlugin extends Plugin {
 		// but on a phone they cover the document the sync is meant to update.
 		// Manual syncs use their own explicit notice; background errors stay loud.
 		if (Platform.isMobileApp && level !== "errors") return;
-		const rank = { errors: 0, changes: 1, all: 2 } as const;
+		const rank = { off: -1, errors: 0, changes: 1, all: 2 } as const;
 		if (rank[level] <= rank[this.settings.notices]) new Notice(text, timeout);
 	}
 
@@ -5057,9 +5068,10 @@ class PconSettingTab extends PluginSettingTab {
 			},
 			{
 				name: "Notices",
-				desc: "How chatty sync results are.",
+				desc: "How chatty Power Connect is. Off suppresses every popup notice.",
 				build: (st) => {
 					st.addDropdown((d) => {
+						d.addOption("off", "Off");
 						d.addOption("errors", "Errors only");
 						d.addOption("changes", "When something changed");
 						d.addOption("all", "Every sync");

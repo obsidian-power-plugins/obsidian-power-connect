@@ -5,7 +5,7 @@
 
 /** Build stamp shown in settings and logged on load. Must match
  *  manifest.json's version; tests enforce it. */
-export const PCON_BUILD = "1.15.25";
+export const PCON_BUILD = "1.15.26";
 
 /* ---------------- settings ---------------- */
 
@@ -72,7 +72,7 @@ export interface PconSettings {
 	deleteGuardPct: number;
 	e2eEnabled: boolean;
 	e2ePassphrase: string;
-	notices: "all" | "changes" | "errors";
+	notices: "all" | "changes" | "errors" | "off";
 	concurrency: number;
 	verboseLog: boolean;
 	/** Shares this vault receives. Kept in settings, not in per-device
