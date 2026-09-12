@@ -40,7 +40,7 @@ Everything works, including sign-in. iOS does not let plugins run in the backgro
 
 ## When sync happens
 
-On start, the moment Obsidian comes back into view, after your edits settle, on a schedule, and on demand from the ribbon, command palette, or status bar. On desktop there is also a live connection, so another device's upload lands here within seconds.
+On start, the moment Obsidian comes back into view, after your edits settle, on a schedule, and on demand from the ribbon, command palette, or status bar. With Dropbox on desktop there is also a live connection, so another device's upload lands here within seconds; OneDrive and Google Drive use the schedule.
 
 ## Choosing what syncs
 

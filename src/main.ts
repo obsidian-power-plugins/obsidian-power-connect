@@ -365,6 +365,7 @@ export default class PowerConnectPlugin extends Plugin {
 	engine: SyncEngine = new SyncEngine(
 		{
 			settings: () => this.settings,
+			remoteName: () => this.remote.name,
 			// Parallel transfers are excellent on desktop. On iOS every downloaded
 			// file also wakes Obsidian's index and view layer in the same webview;
 			// serial writes keep taps and scrolling responsive during catch-up.
@@ -377,7 +378,7 @@ export default class PowerConnectPlugin extends Plugin {
 			log: (level, text) => this.log(level, text),
 			saveState: () => this.saveState(),
 			settingsChanged: () => this.queueSave(),
-			askConflict: (path, lMtime, lSize, rMtime, rSize) => new ConflictModal(this.app, path, lMtime, lSize, rMtime, rSize).ask(),
+			askConflict: (path, lMtime, lSize, rMtime, rSize) => new ConflictModal(this.app, this.remote.name, path, lMtime, lSize, rMtime, rSize).ask(),
 		},
 		new ObsidianVaultIO(this),
 		((plugin: PowerConnectPlugin): RemoteIO => ({
@@ -1195,7 +1196,7 @@ export default class PowerConnectPlugin extends Plugin {
 				`⇄ ${this.lastSharePullMs ? fmtClock(this.lastSharePullMs) : "shares"}`,
 				"Power Connect: click to check the shares you receive"
 			);
-		else if (!this.remote.connected) this.setStatus("off", "⇄ set up", "Power Connect: connect Dropbox in settings");
+		else if (!this.remote.connected) this.setStatus("off", "⇄ set up", `Power Connect: connect ${this.remote.name} in settings`);
 		else if (this.paused) this.setStatus("idle", "⇄ paused", "Power Connect: automatic sync paused");
 		else if (this.lastSyncMs) this.setStatus("ok", `⇄ ${fmtClock(this.lastSyncMs)}`, "Power Connect: last synced, click to sync now");
 		else this.setStatus("idle", "⇄ ready", "Power Connect: click to run the first sync");
@@ -1833,7 +1834,7 @@ export default class PowerConnectPlugin extends Plugin {
 
 	async previewSync(): Promise<void> {
 		if (!this.remote.connected) {
-			new Notice("Power Connect: connect Dropbox in settings first.");
+			new Notice(`Power Connect: connect ${this.remote.name} in settings first.`);
 			return;
 		}
 		if (this.running) {
@@ -1859,7 +1860,7 @@ export default class PowerConnectPlugin extends Plugin {
 
 	async syncNow(reason: string, interactive: boolean): Promise<void> {
 		if (!this.remote.connected) {
-			if (interactive) new Notice("Power Connect: connect Dropbox in settings first.");
+			if (interactive) new Notice(`Power Connect: connect ${this.remote.name} in settings first.`);
 			return;
 		}
 		if (interactive && Platform.isMobileApp && this.mobileStartupPending) {
@@ -1892,7 +1893,7 @@ export default class PowerConnectPlugin extends Plugin {
 				if (!this.blockedNoticed) {
 					this.blockedNoticed = true;
 					new Notice(
-						`Power Connect: the first sync would merge ${prep.local.size} local files with ${prep.remote.size} already on Dropbox. Run "Preview sync" or "Sync now" to proceed.`,
+						`Power Connect: the first sync would merge ${prep.local.size} local files with ${prep.remote.size} already on ${this.remote.name}. Run "Preview sync" or "Sync now" to proceed.`,
 						0
 					);
 				}
@@ -1903,7 +1904,7 @@ export default class PowerConnectPlugin extends Plugin {
 			let plan = prep.plan;
 			if (plan.holdDeletes) {
 				if (interactive) {
-					const choice = await new DeleteHoldModal(this.app, plan).ask();
+					const choice = await new DeleteHoldModal(this.app, this.remote.name, plan).ask();
 					if (choice === "cancel") {
 						this.log("info", "Sync canceled at the delete review.");
 						return;
@@ -1956,10 +1957,10 @@ export default class PowerConnectPlugin extends Plugin {
 				}
 			} else if (isAuthDead(e)) {
 				// a revoked or expired grant never heals by retrying
-				this.setStatus("error", "⇄ reconnect", "Power Connect: the Dropbox connection expired. Reconnect in settings.");
+				this.setStatus("error", "⇄ reconnect", `Power Connect: the ${this.remote.name} connection expired. Reconnect in settings.`);
 				if (interactive || !this.blockedNoticed) {
 					this.blockedNoticed = true;
-					new Notice("Power Connect: the Dropbox connection expired. Reconnect in settings.", 10000);
+					new Notice(`Power Connect: the ${this.remote.name} connection expired. Reconnect in settings.`, 10000);
 				}
 			} else {
 				this.failStreak++;
@@ -2003,8 +2004,9 @@ export default class PowerConnectPlugin extends Plugin {
 
 	/** Factory reset for this device: settings back to defaults, journal
 	 *  forgotten, every piece of per-device storage cleared. Notes and the
-	 *  Dropbox side are untouched. The one honest meaning of "start over". */
+	 *  remote side are untouched. The one honest meaning of "start over". */
 	async forgetThisDevice(): Promise<void> {
+		const remoteName = this.remote.name;
 		if (this.saveTimer != null) {
 			window.clearTimeout(this.saveTimer);
 			this.saveTimer = null;
@@ -2023,7 +2025,7 @@ export default class PowerConnectPlugin extends Plugin {
 		this.applySettings();
 		this.refreshIdleStatus();
 		this.refreshSettingsTab?.();
-		this.log("info", "This device's Power Connect state was erased; notes and Dropbox were not touched.");
+		this.log("info", `This device's Power Connect state was erased; notes and ${remoteName} were not touched.`);
 	}
 
 	private updateNoticed = "";
@@ -2094,7 +2096,7 @@ export default class PowerConnectPlugin extends Plugin {
 			this.adoptSettings(Object.assign({}, this.settings, raw));
 			this.queueSave();
 			this.applySettings();
-			this.log("info", "Adopted this vault's shared settings from the Dropbox copy.");
+			this.log("info", `Adopted this vault's shared settings from the ${this.remote.name} copy.`);
 			return true;
 		} catch {
 			return false; // nothing up there yet; local settings stand
@@ -2106,7 +2108,7 @@ export default class PowerConnectPlugin extends Plugin {
 	 *  protected files re-upload encrypted the next time they change, and
 	 *  downloads tell plain from ciphertext by looking at the bytes. */
 	async setSecretsProtection(on: boolean): Promise<string | null> {
-		if (!this.remote.connected) return "Connect Dropbox first.";
+		if (!this.remote.connected) return `Connect ${this.remote.name} first.`;
 		if (this.running) return "A sync is running; try again in a moment.";
 		if (on && !this.settings.e2ePassphrase) return "Set a passphrase first.";
 		const root = this.remoteRoot();
@@ -2153,7 +2155,7 @@ export default class PowerConnectPlugin extends Plugin {
 	 *  sync converges everything else. Reuses the shared secrets envelope, so a
 	 *  folder and the plugin-settings files ride one passphrase. */
 	async setFolderProtection(folder: string, on: boolean): Promise<string | null> {
-		if (!this.remote.connected) return "Connect Dropbox first.";
+		if (!this.remote.connected) return `Connect ${this.remote.name} first.`;
 		if (this.running) return "A sync is running; try again in a moment.";
 		if (on && !this.settings.e2ePassphrase) return "Set a passphrase first.";
 		const key = folder.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "").trim();
@@ -2210,7 +2212,7 @@ export default class PowerConnectPlugin extends Plugin {
 	 *  eat vaults. The guided path is: pick the state before the first sync,
 	 *  or point at a fresh folder name and let it re-upload. */
 	async setEncryption(on: boolean): Promise<string | null> {
-		if (!this.remote.connected) return "Connect Dropbox first.";
+		if (!this.remote.connected) return `Connect ${this.remote.name} first.`;
 		if (this.running) return "A sync is running; try again in a moment.";
 		if (on && !this.settings.e2ePassphrase) return "Set a passphrase first.";
 		const root = this.remoteRoot();
@@ -2219,8 +2221,8 @@ export default class PowerConnectPlugin extends Plugin {
 		const files = entries.filter((e) => e.tag === "file" && normKey(normRel(e.meta.pathDisplay)).split("/").pop() !== MARKER_NAME);
 		if (files.length) {
 			return on
-				? "This Dropbox folder already holds an unencrypted copy. Use a new folder name in settings (or clear the folder in Dropbox), then enable encryption there."
-				: "This Dropbox folder holds an encrypted copy. Use a new folder name in settings (or clear the folder in Dropbox), then sync unencrypted there.";
+				? `This ${this.remote.name} folder already holds an unencrypted copy. Use a new folder name in settings (or clear the folder in ${this.remote.name}), then enable encryption there.`
+				: `This ${this.remote.name} folder holds an encrypted copy. Use a new folder name in settings (or clear the folder in ${this.remote.name}), then sync unencrypted there.`;
 		}
 		let marker: Marker;
 		if (on) {
@@ -2235,7 +2237,7 @@ export default class PowerConnectPlugin extends Plugin {
 		this.settings.e2eEnabled = on;
 		this.queueSave();
 		this.engine.markerDirty(); // the next run re-reads the marker and derives the key
-		this.log("info", on ? "End-to-end encryption enabled for this Dropbox folder." : "Encryption disabled for this Dropbox folder.");
+		this.log("info", on ? `End-to-end encryption enabled for this ${this.remote.name} folder.` : `Encryption disabled for this ${this.remote.name} folder.`);
 		return null;
 	}
 }
@@ -2441,7 +2443,7 @@ class SetupWizard extends Modal {
 		new ConfirmModal(
 			this.app,
 			"Start over on this device?",
-			"This device's Power Connect settings, sign-in, and sync journal are erased so setup starts from nothing. Your notes and everything in Dropbox stay untouched.",
+			`This device's Power Connect settings, sign-in, and sync journal are erased so setup starts from nothing. Your notes and everything in ${this.plugin.remote.name} stay untouched.`,
 			"Erase and start over",
 			() =>
 				void this.plugin.forgetThisDevice().then(() => {
@@ -2497,7 +2499,7 @@ class SetupWizard extends Modal {
 		const c = this.contentEl;
 		if (this.joining) {
 			c.createEl("p", {
-				text: `This vault already has Power Connect settings${this.plugin.settings.remoteFolder ? ` (Dropbox folder "${this.plugin.settings.remoteFolder}")` : ""}, from an earlier setup here or from another device. Sign in to use them as they are${this.plugin.settings.e2eEnabled ? " (the encryption passphrase is also entered per device)" : ""}, or start over and choose everything again.`,
+				text: `This vault already has Power Connect settings${this.plugin.settings.remoteFolder ? ` (${this.plugin.remote.name} folder "${this.plugin.settings.remoteFolder}")` : ""}, from an earlier setup here or from another device. Sign in to use them as they are${this.plugin.settings.e2eEnabled ? " (the encryption passphrase is also entered per device)" : ""}, or start over and choose everything again.`,
 				cls: "pcon-muted",
 			});
 		} else {
@@ -2617,6 +2619,7 @@ class SetupWizard extends Modal {
 			open.setAttr("target", "_blank");
 			steps.createEl("li", { text: "Supported account types: pick the option that includes personal Microsoft accounts, then press Register." });
 			steps.createEl("li", { text: "Open the app's Authentication page, set Allow public client flows to Yes, and save." });
+			steps.createEl("li", { text: "Open API permissions, add Microsoft Graph delegated permissions Files.ReadWrite.AppFolder and User.Read, then grant consent if your organization requires it." });
 			steps.createEl("li", { text: "Copy the Application (client) ID from the Overview page and paste it below." });
 			steps.createEl("li", { text: "Press Start Microsoft sign-in below and follow the code it shows." });
 		} else {
@@ -3010,7 +3013,7 @@ class SetupWizard extends Modal {
 		if (this.privacy === null) this.privacy = empty ? "secrets" : "off";
 		c.createEl("p", {
 			text: empty
-				? "This folder is empty, so privacy is a free choice; full encryption is decided per folder before the first upload. Protecting plugin settings files encrypts only those (they routinely hold API keys) while notes stay readable in Dropbox. Either way, the passphrase is entered once on each device, and losing it makes the protected content unreadable."
+				? `This folder is empty, so privacy is a free choice; full encryption is decided per folder before the first upload. Protecting plugin settings files encrypts only those (they routinely hold API keys) while notes stay readable in ${this.plugin.remote.name}. Either way, the passphrase is entered once on each device, and losing it makes the protected content unreadable.`
 				: `This folder already holds ${p?.files ?? 0} unencrypted file(s), and this device will join that copy. Plugin settings files (they routinely hold API keys) can be protected here with a passphrase; choosing full encryption goes back a step for a fresh folder name and one full upload.`,
 			cls: "pcon-muted",
 		});
@@ -3111,7 +3114,7 @@ class SetupWizard extends Modal {
 		c.createEl("p", { text: "This device is ready.", cls: "pcon-muted" });
 		const ul = c.createEl("ul", { cls: "pcon-steps" });
 		ul.createEl("li", { text: `Account: ${this.plugin.accountLabel() || "connected"} (${this.plugin.remote.name})` });
-		ul.createEl("li", { text: `Dropbox folder: ${s.remoteFolder || this.app.vault.getName()}` });
+		ul.createEl("li", { text: `${this.plugin.remote.name} folder: ${s.remoteFolder || this.app.vault.getName()}` });
 		ul.createEl("li", {
 			text: s.e2eEnabled
 				? "Encryption: on for everything (per-device passphrase)"
@@ -3232,11 +3235,11 @@ class PlanModal extends Modal {
 			if (items.length > 150) list.createDiv({ cls: "pcon-plan-item pcon-muted", text: `and ${items.length - 150} more` });
 		};
 		const of = (t: Action["t"]): string[] => p.actions.filter((a) => a.t === t).map((a) => ("path" in a ? a.path : "toPath" in a ? `${a.fromPath} to ${a.toPath}` : a.key));
-		section("Upload to Dropbox", of("upload"));
-		section("Download from Dropbox", of("download"));
-		section("Move on Dropbox", of("moveRemote"));
+		section(`Upload to ${this.plugin.remote.name}`, of("upload"));
+		section(`Download from ${this.plugin.remote.name}`, of("download"));
+		section(`Move on ${this.plugin.remote.name}`, of("moveRemote"));
 		section("Conflicts to resolve", of("conflict"));
-		section("Delete on Dropbox", of("deleteRemote"));
+		section(`Delete on ${this.plugin.remote.name}`, of("deleteRemote"));
 		section("Delete in this vault (to trash)", of("deleteLocal"));
 		if (p.adopts) contentEl.createEl("p", { cls: "pcon-muted", text: `${p.adopts} file(s) already match by content and will pair up without any transfer.` });
 
@@ -3264,6 +3267,7 @@ class DeleteHoldModal extends Modal {
 
 	constructor(
 		app: App,
+		private remoteName: string,
 		private plan: Plan
 	) {
 		super(app);
@@ -3290,7 +3294,7 @@ class DeleteHoldModal extends Modal {
 		this.titleEl.setText("Review deletions");
 		const n = this.plan.deletesLocal + this.plan.deletesRemote;
 		contentEl.createEl("p", {
-			text: `This sync wants to delete ${n} files (${this.plan.deletesLocal} here, ${this.plan.deletesRemote} on Dropbox). That is a large share of the vault, which usually means a folder was moved, renamed, or emptied on one side. Local deletions go to the trash, and Dropbox keeps 30 days of version history, but it is worth a look.`,
+			text: `This sync wants to delete ${n} files (${this.plan.deletesLocal} here, ${this.plan.deletesRemote} on ${this.remoteName}). That is a large share of the vault, which usually means a folder was moved, renamed, or emptied on one side. Local deletions go to the trash; check ${this.remoteName}'s recovery and version-history policy before continuing.`,
 		});
 		const list = contentEl.createDiv({ cls: "pcon-plan-list" });
 		const paths = this.plan.actions.filter((a) => a.t === "deleteLocal" || a.t === "deleteRemote").map((a) => ("path" in a ? a.path : ""));
@@ -3318,6 +3322,7 @@ class ConflictModal extends Modal {
 
 	constructor(
 		app: App,
+		private remoteName: string,
 		private path: string,
 		private lMtime: number,
 		private lSize: number,
@@ -3350,7 +3355,7 @@ class ConflictModal extends Modal {
 		const side = (label: string, mtime: number, size: number) =>
 			contentEl.createDiv({ cls: "pcon-muted", text: `${label}: ${mtime ? new Date(mtime).toLocaleString() : "unknown time"}, ${fmtBytes(size)}` });
 		side("This device", this.lMtime, this.lSize);
-		side("Dropbox", this.rMtime, this.rSize);
+		side(this.remoteName, this.rMtime, this.rSize);
 		const applyRow = contentEl.createDiv({ cls: "pcon-applyall" });
 		const cb = applyRow.createEl("input", { type: "checkbox" });
 		cb.id = "pcon-applyall";
@@ -3359,7 +3364,7 @@ class ConflictModal extends Modal {
 		new Setting(contentEl)
 			.addButton((b) => b.setButtonText("Keep both").setCta().onClick(() => this.answer("both")))
 			.addButton((b) => b.setButtonText("Keep this device's").onClick(() => this.answer("local")))
-			.addButton((b) => b.setButtonText("Keep Dropbox's").onClick(() => this.answer("remote")));
+			.addButton((b) => b.setButtonText(`Keep ${this.remoteName}'s`).onClick(() => this.answer("remote")));
 	}
 
 	onClose() {
@@ -4705,6 +4710,7 @@ class PconSettingTab extends PluginSettingTab {
 	 *  render because most of this tab reflects live sync state. */
 	private buildPages(): Page[] {
 		const s = this.plugin.settings;
+		const provider = this.plugin.remote.name;
 		const save = () => this.plugin.queueSave();
 		const intro = (text: string): Row => ({ name: "", desc: text, cls: "pcon-section-intro" });
 
@@ -4721,7 +4727,7 @@ class PconSettingTab extends PluginSettingTab {
 		} else {
 			storage.push({
 				name: "Provider",
-				help: "Dropbox is the first supported provider. The sync engine is storage-agnostic behind one small interface, so more providers (Box, OneDrive, and friends) can be added without changing anything else here. A vault syncs through one provider at a time.",
+				help: "Power Connect supports Dropbox, OneDrive, and Google Drive. A vault syncs through one provider at a time.",
 				build: (st) => {
 					st.controlEl.createSpan({ text: this.plugin.remote.name });
 				},
@@ -4729,7 +4735,7 @@ class PconSettingTab extends PluginSettingTab {
 			storage.push({
 				name: "Connection",
 				desc: this.plugin.accountLabel() ? `Connected as ${this.plugin.accountLabel()}.` : "Connected.",
-				help: "The one-time setup creates a Dropbox app under your account with App folder access, so Power Connect can only ever see its own folder, never the rest of your Dropbox. Sign-in uses a paste-a-code flow that works the same on desktop and phone. Each device connects once; tokens stay on the device.",
+				help: `${this.plugin.remote.name} sign-in is scoped to the app-owned storage used by Power Connect. Each device connects once; tokens stay on that device.`,
 				build: (st) => {
 					st.addButton((b) =>
 						b
@@ -4815,9 +4821,9 @@ class PconSettingTab extends PluginSettingTab {
 				storage.push({
 					name: "Encrypted folders",
 					desc: s.e2ePassphrase
-						? "Top-level folders that upload encrypted while the rest of the vault stays plain, sharing the one protection passphrase. Good for an Email folder or anything private. Files stay readable on this device; only the Dropbox copy is encrypted."
+						? `Top-level folders that upload encrypted while the rest of the vault stays plain, sharing the one protection passphrase. Good for an Email folder or anything private. Files stay readable on this device; only the ${provider} copy is encrypted.`
 						: "Set a passphrase in setup first, then protect individual top-level folders here.",
-					help: "Add as many folders as you like: pick or type a top-level folder (spaces and all) and click Protect, then repeat. Each protected folder is encrypted in transit and at rest on Dropbox but stays plaintext on this device, so search, Bases, and everything else keep working. Turning protection on re-uploads the folder's existing files as ciphertext; turning it off restores them to plaintext. One passphrase covers every protected folder and the plugin settings files.",
+					help: `Add as many folders as you like: pick or type a top-level folder (spaces and all) and click Protect, then repeat. Each protected folder is encrypted in transit and at rest on ${provider} but stays plaintext on this device, so search, Bases, and everything else keep working. Turning protection on re-uploads the folder's existing files as ciphertext; turning it off restores them to plaintext. One passphrase covers every protected folder and the plugin settings files.`,
 					build: (st) => {
 						if (!s.e2ePassphrase) return;
 						// add-a-folder row: a folder picker plus an explicit Protect
@@ -4835,7 +4841,7 @@ class PconSettingTab extends PluginSettingTab {
 								new Notice(`Power Connect: "${top}" is already protected.`, 6000);
 								return;
 							}
-							new Notice(`Power Connect: protecting "${top}" (re-encrypting its files on Dropbox)…`, 6000);
+							new Notice(`Power Connect: protecting "${top}" (re-encrypting its files on ${provider})…`, 6000);
 							const err = await this.plugin.setFolderProtection(top, true);
 							if (err) new Notice("Power Connect: " + err, 8000);
 							this.refresh();
@@ -4875,17 +4881,17 @@ class PconSettingTab extends PluginSettingTab {
 				for (const pf of protectedFolders) {
 					storage.push({
 						name: `🔒 ${pf}`,
-						desc: "Encrypted on Dropbox; plaintext on this device.",
+							desc: `Encrypted on ${provider}; plaintext on this device.`,
 						build: (st) => {
 							st.addExtraButton((b) =>
 								b
 									.setIcon("trash")
-									.setTooltip("Stop protecting (restores plaintext on Dropbox)")
+									.setTooltip(`Stop protecting (restores plaintext on ${provider})`)
 									.onClick(() =>
 										void this.plugin.setFolderProtection(pf, false).then((err) => {
 											if (err) new Notice("Power Connect: " + err, 8000);
 											else {
-												new Notice(`Power Connect: "${pf}" is no longer encrypted on Dropbox.`, 6000);
+												new Notice(`Power Connect: "${pf}" is no longer encrypted on ${provider}.`, 6000);
 												this.refresh();
 											}
 										})
@@ -4902,11 +4908,11 @@ class PconSettingTab extends PluginSettingTab {
 			accountGroups.push({
 				heading: "Other devices",
 				rows: [
-					intro("The same vault in Obsidian on another computer or phone stays in sync through this Dropbox folder. Each device installs Power Connect once; everything else arrives through sync."),
+					intro(`The same vault in Obsidian on another computer or phone stays in sync through this ${provider} folder. Each device installs Power Connect once; everything else arrives through sync.`),
 					{
 						name: "Add another device",
 						desc: "Set up this vault in Obsidian on another computer or phone. A setup code fills that device's wizard.",
-						help: "Install the plugin on the other device, paste the setup code into its wizard, and authorize Dropbox there; the passphrase, if one is set, is entered on that device too. The first sync brings notes, settings, themes, and plugins, and afterwards updates flow by themselves.",
+						help: `Install the plugin on the other device, paste the setup code into its wizard, and authorize ${provider} there; the passphrase, if one is set, is entered on that device too. The first sync brings notes, settings, themes, and plugins, and afterwards updates flow by themselves.`,
 						build: (st) => {
 							st.addButton((b) =>
 								b
@@ -5009,10 +5015,13 @@ class PconSettingTab extends PluginSettingTab {
 			{
 				name: "Live sync (desktop)",
 				desc: "Pick up other devices' changes within seconds instead of on the schedule.",
-				help: "Holds Dropbox's change-notification endpoint open in the background (one idle HTTPS request, no polling). When any device uploads, this one hears about it within seconds and runs a delta sync. Desktop only: phones cannot keep the connection open in the background. The interval schedule stays as the safety net.",
+				help:
+					s.provider === "dropbox"
+						? "Holds Dropbox's change-notification endpoint open in the background (one idle HTTPS request, no polling). When any device uploads, this one hears about it within seconds and runs a delta sync. Desktop only: phones cannot keep the connection open in the background. The interval schedule stays as the safety net."
+						: `${provider} uses the interval schedule for remote changes; live provider notifications are currently available only with Dropbox.`,
 				build: (st) => {
 					st.addToggle((t) =>
-						t.setValue(s.liveSync).onChange((v) => {
+						t.setDisabled(s.provider !== "dropbox").setValue(s.provider === "dropbox" && s.liveSync).onChange((v) => {
 							s.liveSync = v;
 							save();
 							this.plugin.applySettings();
@@ -5093,7 +5102,7 @@ class PconSettingTab extends PluginSettingTab {
 					st.addDropdown((d) => {
 						d.addOption("both", "Keep both copies");
 						d.addOption("local", "Prefer this device");
-						d.addOption("remote", "Prefer Dropbox");
+							d.addOption("remote", `Prefer ${provider}`);
 						d.addOption("ask", "Ask each time");
 						d.setValue(s.conflictPolicy).onChange((v) => {
 							s.conflictPolicy = v as PconSettings["conflictPolicy"];
@@ -5118,7 +5127,7 @@ class PconSettingTab extends PluginSettingTab {
 			{
 				name: "Delete guard",
 				desc: "Pause when one sync would delete more than this share of the vault.",
-				help: "If the Dropbox folder is emptied, or a scan goes wrong, a naive sync would mirror that destruction. Past this threshold (and always more than 10 files), Power Connect holds the deletions: a manual sync shows them for review, a background sync completes everything else and leaves the deletions for you. Local deletions also always go to the trash, and Dropbox keeps 30 days of history.",
+				help: `If the ${provider} folder is emptied, or a scan goes wrong, a naive sync would mirror that destruction. Past this threshold (and always more than 10 files), Power Connect holds the deletions: a manual sync shows them for review, a background sync completes everything else and leaves the deletions for you. Local deletions also always go to the trash; remote recovery follows ${provider}'s retention policy.`,
 				build: (st) => {
 					st.addSlider((sl) =>
 						showSliderValue(sl)
@@ -5282,7 +5291,7 @@ class PconSettingTab extends PluginSettingTab {
 			limits.push({
 				name: "Include plugin settings files",
 				desc: "Sync every plugin's data.json too. They routinely hold API keys, so they travel only under encryption: a fully encrypted folder, or plugin settings protection chosen in the guided setup. Without either, they are held back and the sync log says so.",
-				help: "Consider end-to-end encryption if you turn this on: with it, Dropbox stores only ciphertext, so keys inside plugin settings stay private. Power Connect's own data.json is always excluded regardless, since it holds your Dropbox tokens.",
+					help: `Consider end-to-end encryption if you turn this on: with it, ${provider} stores only ciphertext, so keys inside plugin settings stay private. Power Connect's own data.json is always excluded regardless, since it holds your ${provider} tokens.`,
 				build: (st) => {
 					st.addToggle((t) =>
 						t.setValue(s.syncPluginData).onChange((v) => {
@@ -5323,7 +5332,10 @@ class PconSettingTab extends PluginSettingTab {
 		const tuning: Row[] = [
 			{
 				name: "Parallel transfers",
-				desc: "How many files move at once. Uploads stage without Dropbox's write lock and commit in batches, so higher values genuinely help on a big first sync.",
+				desc:
+					s.provider === "dropbox"
+						? "How many files move at once. Uploads stage without Dropbox's write lock and commit in batches, so higher values genuinely help on a big first sync."
+						: `How many files move at once between this device and ${provider}.`,
 				build: (st) => {
 					st.addDropdown((d) => {
 						for (const n of [1, 2, 3, 4, 6, 8, 12]) d.addOption(String(n), String(n));
@@ -5352,7 +5364,7 @@ class PconSettingTab extends PluginSettingTab {
 			{
 				name: "Full rescan",
 				desc: "Re-check every file's content against the journal on the next sync.",
-				help: "The normal scan trusts unchanged size and modification time. A full rescan rehashes everything and relists Dropbox, which catches edits that kept the same timestamp. Slower, never destructive.",
+				help: `The normal scan trusts unchanged size and modification time. A full rescan rehashes everything and relists ${provider}, which catches edits that kept the same timestamp. Slower, never destructive.`,
 				build: (st) => {
 					st.addButton((b) =>
 						b.setButtonText("Rescan and sync").onClick(() => {
@@ -5372,7 +5384,7 @@ class PconSettingTab extends PluginSettingTab {
 								new ConfirmModal(
 									this.app,
 									"Reset sync state?",
-									"The journal on this device is forgotten. Nothing is deleted anywhere: the next sync pairs identical files by content and keeps both versions of any file that differs (as conflict copies). Use this after changing the Dropbox folder name, or if sync seems wedged.",
+									`The journal on this device is forgotten. Nothing is deleted anywhere: the next sync pairs identical files by content and keeps both versions of any file that differs (as conflict copies). Use this after changing the ${provider} folder name, or if sync seems wedged.`,
 									"Reset",
 									() => void this.plugin.resetState()
 								).open()

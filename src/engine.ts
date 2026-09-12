@@ -109,6 +109,8 @@ export interface RemoteIO {
 /** Everything else the engine needs to know about where it is running. */
 export interface EngineHost {
 	settings(): PconSettings;
+	/** Display name for the active storage provider. */
+	remoteName?(): string;
 	/** Effective worker count for this device. The Obsidian host lowers this on
 	 *  phones so a catch-up cannot monopolize the webview with parallel writes;
 	 *  simulations and other hosts fall back to the saved setting. */
@@ -185,6 +187,10 @@ export class SyncEngine {
 		private vault: VaultIO,
 		private remote: RemoteIO
 	) {}
+
+	private providerName(): string {
+		return this.host.remoteName?.() ?? "remote storage";
+	}
 
 	/* ---------------- journal ---------------- */
 
@@ -470,7 +476,7 @@ export class SyncEngine {
 				// engine believing everything is still there
 				if (en.tag === "deleted") {
 					this.remoteMap.clear();
-					this.host.log("warn", "The Dropbox folder itself was deleted; the delete guard will review what happens locally.");
+					this.host.log("warn", `The ${this.providerName()} folder itself was deleted; the delete guard will review what happens locally.`);
 				}
 				continue;
 			}
@@ -512,7 +518,7 @@ export class SyncEngine {
 			this.cursor = cursor;
 		} catch (e) {
 			if (isCursorReset(e)) {
-				this.host.log("info", "Dropbox reset the change cursor; relisting the folder.");
+				this.host.log("info", `${this.providerName()} reset the change cursor; relisting the folder.`);
 				this.cursor = "";
 				await this.refreshRemote();
 				return;
@@ -529,9 +535,9 @@ export class SyncEngine {
 		// marker names which folders are protected and every device reads it here
 		this.protectedFolders = marker.e2e ? [] : markerProtectedFolders(marker);
 		if (marker.e2e) {
-			if (!s.e2ePassphrase) throw new SyncBlocked("This Dropbox folder is encrypted. Enter the passphrase in Power Connect settings.");
+			if (!s.e2ePassphrase) throw new SyncBlocked(`This ${this.providerName()} folder is encrypted. Enter the passphrase in Power Connect settings.`);
 			const key = await deriveKey(s.e2ePassphrase, marker.salt ?? "");
-			if (!(await verifyCheck(key, marker.check ?? ""))) throw new SyncBlocked("The encryption passphrase does not match this Dropbox folder.");
+			if (!(await verifyCheck(key, marker.check ?? ""))) throw new SyncBlocked(`The encryption passphrase does not match this ${this.providerName()} folder.`);
 			this.e2eKey = key;
 			if (!s.e2eEnabled) {
 				s.e2eEnabled = true;
@@ -539,7 +545,7 @@ export class SyncEngine {
 			}
 		} else {
 			if (s.e2eEnabled)
-				throw new SyncBlocked("Encryption is on, but this Dropbox folder holds an unencrypted copy. Turn encryption off, or use an empty folder name and enable it there.");
+				throw new SyncBlocked(`Encryption is on, but this ${this.providerName()} folder holds an unencrypted copy. Turn encryption off, or use an empty folder name and enable it there.`);
 			this.e2eKey = null;
 			this.secretsKey = null;
 			this.protectionSeen = !!marker.secrets;
@@ -589,10 +595,10 @@ export class SyncEngine {
 				const { bytes } = await this.remote.download(probe[0].meta.pathDisplay);
 				if (looksEncrypted(bytes))
 					throw new SyncBlocked(
-						"This Dropbox folder holds encrypted files but its .powerconnect.json marker is missing, and the marker holds the key salt. Restore .powerconnect.json from Dropbox's deleted files or version history."
+						`This ${this.providerName()} folder holds encrypted files but its .powerconnect.json marker is missing, and the marker holds the key salt. Restore .powerconnect.json from ${this.providerName()}'s deleted files or version history.`
 					);
 				if (s.e2eEnabled)
-					throw new SyncBlocked("Encryption is on, but this Dropbox folder holds an unencrypted copy. Turn encryption off, or use an empty folder name and enable it there.");
+					throw new SyncBlocked(`Encryption is on, but this ${this.providerName()} folder holds an unencrypted copy. Turn encryption off, or use an empty folder name and enable it there.`);
 				fresh = { format: 1, e2e: false };
 				this.e2eKey = null;
 			} else if (s.e2eEnabled) {
@@ -615,7 +621,7 @@ export class SyncEngine {
 				// another device wrote the marker first; loop and adopt theirs
 			}
 		}
-		throw new SyncBlocked("Could not settle the Dropbox folder marker; try again in a moment.");
+		throw new SyncBlocked(`Could not settle the ${this.providerName()} folder marker; try again in a moment.`);
 	}
 
 	/* ---------------- scanning ---------------- */
@@ -696,14 +702,14 @@ export class SyncEngine {
 		this.runRoot = root;
 		const rk = normKey(root);
 		if (this.rootKey && this.rootKey !== rk) {
-			this.host.log("info", "The Dropbox folder name changed; forgetting the old journal and re-merging against the new folder.");
+			this.host.log("info", `The ${this.providerName()} folder name changed; forgetting the old journal and re-merging against the new folder.`);
 			this.cursor = "";
 			this.remoteMap.clear();
 			this.baseMap.clear();
 		}
 		this.rootKey = rk;
 		await this.ensureMarker();
-		onProgress("reading Dropbox changes");
+		onProgress(`reading ${this.providerName()} changes`);
 		await this.refreshRemote();
 		void this.host.saveState(); // the cursor moved; the entries it covered must survive a crash
 		const ig = this.buildIgnoreRules();
@@ -773,7 +779,7 @@ export class SyncEngine {
 				}
 				if (isConflict(e)) {
 					stats.skipped++;
-					this.host.log("info", `${a.path ?? a.t} moved on Dropbox during the sync; the next sync will reconcile it.`);
+					this.host.log("info", `${a.path ?? a.t} moved on ${this.providerName()} during the sync; the next sync will reconcile it.`);
 				} else {
 					stats.errors.push(`${a.path ?? a.t}: ${msg(e)}`);
 					this.host.log("error", `${a.path ?? a.t}: ${msg(e)}`);
@@ -879,7 +885,7 @@ export class SyncEngine {
 						this.host.log("info", `Uploaded: ${g.rel}`);
 					} else if (/conflict/i.test(r?.error ?? "")) {
 						stats.skipped++;
-						this.host.log("info", `${g.rel} moved on Dropbox during the sync; the next sync will reconcile it.`);
+						this.host.log("info", `${g.rel} moved on ${this.providerName()} during the sync; the next sync will reconcile it.`);
 					} else {
 						stats.errors.push(`${g.rel}: ${r ? r.error : "upload failed"}`);
 						this.host.log("error", `${g.rel}: ${r ? r.error : "upload failed"}`);
@@ -916,7 +922,7 @@ export class SyncEngine {
 					}
 					if (isConflict(e)) {
 						stats.skipped++;
-						this.host.log("info", `${a.path} moved on Dropbox during the sync; the next sync will reconcile it.`);
+						this.host.log("info", `${a.path} moved on ${this.providerName()} during the sync; the next sync will reconcile it.`);
 					} else {
 						stats.errors.push(`${a.path}: ${msg(e)}`);
 						this.host.log("error", `${a.path}: ${msg(e)}`);
@@ -937,7 +943,7 @@ export class SyncEngine {
 					await this.vault.trash(a.path);
 					this.baseMap.delete(a.key);
 					stats.delLocal++;
-					this.host.log("info", `Deleted here (deleted on Dropbox): ${a.path}`);
+					this.host.log("info", `Deleted here (deleted on ${this.providerName()}): ${a.path}`);
 				});
 			else if (a.t === "deleteRemote")
 				await guard(a, async () => {
@@ -948,7 +954,7 @@ export class SyncEngine {
 					this.baseMap.delete(a.key);
 					this.remoteMap.delete(a.key);
 					stats.delRemote++;
-					this.host.log("info", `Deleted on Dropbox (deleted here): ${a.path}`);
+					this.host.log("info", `Deleted on ${this.providerName()} (deleted here): ${a.path}`);
 				});
 		}
 		for (const a of drops) if (a.t === "dropBase") this.baseMap.delete(a.key);
@@ -1052,7 +1058,7 @@ export class SyncEngine {
 				this.host.log("info", `${r.path} is protected; enter the passphrase in setup to sync it here.`);
 				return;
 			}
-			throw new SyncBlocked(`${r.path} on Dropbox is encrypted. Enter the passphrase in settings.`);
+			throw new SyncBlocked(`${r.path} on ${this.providerName()} is encrypted. Enter the passphrase in settings.`);
 		}
 		// never clobber what happened here while the sync ran: an edit, a
 		// delete, or a file that just appeared all defer to the next run
@@ -1086,10 +1092,10 @@ export class SyncEngine {
 		if (l && meta.contentHash === expected) {
 			this.baseMap.set(toKey, { rev: meta.rev, hash: meta.contentHash, lhash: l.hash, mtime: l.mtime, size: l.size });
 		} else {
-			this.host.log("info", `${toPath} changed on Dropbox during the move; the next sync will reconcile it.`);
+			this.host.log("info", `${toPath} changed on ${this.providerName()} during the move; the next sync will reconcile it.`);
 		}
 		stats.moves++;
-		this.host.log("info", `Moved on Dropbox: ${fromPath} to ${toPath}`);
+		this.host.log("info", `Moved on ${this.providerName()}: ${fromPath} to ${toPath}`);
 	}
 
 	/** Combine concurrent edits using the base revision as the common
@@ -1173,7 +1179,7 @@ export class SyncEngine {
 				// another device merged first; its result includes our remote
 				// side and the next run folds our local edit into it
 				stats.skipped++;
-				this.host.log("info", `${l.path} moved on Dropbox during the merge; the next sync will reconcile it.`);
+				this.host.log("info", `${l.path} moved on ${this.providerName()} during the merge; the next sync will reconcile it.`);
 				return true;
 			}
 			throw e;
@@ -1214,7 +1220,7 @@ export class SyncEngine {
 				this.host.log("info", `${r.path} is protected; enter the passphrase in setup to sync it here.`);
 				return;
 			}
-			throw new SyncBlocked(`${r.path} on Dropbox is encrypted. Enter the passphrase in settings.`);
+			throw new SyncBlocked(`${r.path} on ${this.providerName()} is encrypted. Enter the passphrase in settings.`);
 		}
 		const remoteHash = dk ? await this.hashOf(remotePlain) : meta.contentHash;
 
@@ -1355,7 +1361,7 @@ export class SyncEngine {
 		if (choice === "remote") {
 			await takeRemote();
 			stats.down++;
-			this.host.log("info", `Conflict on ${l.path}: kept the Dropbox copy.`);
+			this.host.log("info", `Conflict on ${l.path}: kept the ${this.providerName()} copy.`);
 			return;
 		}
 

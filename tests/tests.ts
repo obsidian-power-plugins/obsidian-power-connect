@@ -97,6 +97,7 @@ import {
 	resolveShareFiles,
 } from "../src/share";
 import { FakeServer, SimDevice, bytesOf, contentSurvives, converge, fleetDiff, mulberry32, textOf } from "./sim";
+import { onedriveItemUrl, onedriveReferencePath, onedriveRelativePath } from "../src/onedrive-core";
 import manifest from "../manifest.json";
 import pkg from "../package.json";
 import versions from "../versions.json";
@@ -244,6 +245,35 @@ console.log("ignore rules");
 	ok(!!pod && pod.provider === "onedrive" && pod.clientId === "azure-id", "onedrive setup code carries its provider");
 	const pg = parseSetupCode(makeSetupCode({ provider: "gdrive", clientId: "g-id", clientSecret: "g-sec", folder: "Vault", e2e: false }));
 	ok(!!pg && pg.provider === "gdrive" && pg.clientId === "g-id" && pg.clientSecret === "g-sec", "gdrive setup code carries id and installed-app secret");
+}
+console.log("OneDrive path addressing");
+{
+	eq(
+		onedriveItemUrl("/Vault/A note #1%.md"),
+		"https://graph.microsoft.com/v1.0/me/drive/special/approot:/Vault/A%20note%20%231%25.md",
+		"metadata URL has no trailing colon and encodes each path segment"
+	);
+	eq(
+		onedriveItemUrl("/Vault/A note #1%.md", "/content"),
+		"https://graph.microsoft.com/v1.0/me/drive/special/approot:/Vault/A%20note%20%231%25.md:/content",
+		"content URL closes the path before its action"
+	);
+	eq(
+		onedriveItemUrl("", "/children"),
+		"https://graph.microsoft.com/v1.0/me/drive/special/approot/children",
+		"app-folder actions work without an item path"
+	);
+	eq(
+		onedriveReferencePath("/drive/root:/Apps/Power%20Connect", "/Vault/A #1"),
+		"/drive/root:/Apps/Power%20Connect/Vault/A%20%231",
+		"move destinations preserve Graph's encoded base and encode relative names"
+	);
+	eq(
+		onedriveRelativePath("/drive/root:/Apps/Power%20Connect/Vault/A%20folder", "/drive/root:/Apps/Power Connect", "Note.md"),
+		"/Vault/A folder/Note.md",
+		"delta metadata trims a decoded app-folder prefix"
+	);
+	eq(onedriveRelativePath("", "/drive/root:/Apps/Power Connect", "Gone.md"), "/Gone.md", "deleted items without parent metadata still produce a safe root path");
 }
 {
 	eq(clientIdProblem("dropbox", "kf8d2xy9plq4m1z"), null, "a real-shaped Dropbox app key passes");

@@ -9,11 +9,11 @@
 
 import { requestUrl, RequestUrlResponse } from "obsidian";
 import { DropboxError, ListEntry, RemoteFileMeta, assertWholeDownload, backoffMs, msg, normRel, parseRetryAfter } from "./core";
+import { ONEDRIVE_GRAPH as GRAPH, onedriveItemUrl, onedriveReferencePath, onedriveRelativePath } from "./onedrive-core";
 import { quickXorHash } from "./quickxor";
 
-const GRAPH = "https://graph.microsoft.com/v1.0";
 const LOGIN = "https://login.microsoftonline.com/common/oauth2/v2.0";
-const SCOPES = "Files.ReadWrite.AppFolder offline_access openid email";
+const SCOPES = "Files.ReadWrite.AppFolder User.Read offline_access openid email";
 const SIMPLE_MAX = 4 * 1024 * 1024;
 const CHUNK = 10_485_760; // 32 x 320 KiB, the session upload granularity Graph requires
 
@@ -68,7 +68,7 @@ export async function onedriveDeviceCode(clientId: string): Promise<DeviceCode> 
 
 /** Poll until the user finishes signing in; resolves with the tokens. */
 export async function onedrivePollToken(clientId: string, dc: DeviceCode, cancelled: () => boolean): Promise<{ refresh: string; access: string; expiry: number }> {
-	const interval = Math.max(2, dc.interval || 5) * 1000;
+	let interval = Math.max(2, dc.interval || 5) * 1000;
 	for (;;) {
 		if (cancelled()) throw new Error("Sign-in cancelled.");
 		await sleep(interval);
@@ -81,9 +81,14 @@ export async function onedrivePollToken(clientId: string, dc: DeviceCode, cancel
 		});
 		const body = JSON.parse(r.text) as { error?: string; refresh_token?: string; access_token?: string; expires_in?: number };
 		if (r.status === 200 && body.access_token) {
-			return { refresh: body.refresh_token ?? "", access: body.access_token, expiry: Date.now() + (body.expires_in ?? 3600) * 1000 };
+			if (!body.refresh_token) throw new Error("Microsoft returned no refresh token. Confirm offline_access is allowed for the app, then sign in again.");
+			return { refresh: body.refresh_token, access: body.access_token, expiry: Date.now() + (body.expires_in ?? 3600) * 1000 };
 		}
-		if (body.error === "authorization_pending" || body.error === "slow_down") continue;
+		if (body.error === "authorization_pending") continue;
+		if (body.error === "slow_down") {
+			interval += 5000;
+			continue;
+		}
 		throw new Error(`Microsoft sign-in failed: ${body.error ?? r.status}`);
 	}
 }
@@ -94,6 +99,10 @@ export class OneDrive {
 	/** Absolute Graph path prefix of the app folder, e.g.
 	 *  "/drive/root:/Apps/Power Connect", learned on first use. */
 	private approotPath = "";
+	/** Human-readable form of approotPath, used to trim itemReference paths. */
+	private approotDisplayPath = "";
+	/** Coalesce the burst of refreshes when a concurrent sync reaches expiry. */
+	private refreshing: Promise<string> | null = null;
 
 	constructor(private o: OneDriveOptions) {}
 
@@ -101,21 +110,36 @@ export class OneDrive {
 		return !!(this.o.clientId() && this.o.refreshToken());
 	}
 
-	private async accessToken(): Promise<string> {
+	private async accessToken(force = false): Promise<string> {
 		const a = this.o.access();
-		if (a.token && Date.now() < a.expiry - 60_000) return a.token;
-		const r = await requestUrl({
-			url: `${LOGIN}/token`,
-			method: "POST",
-			headers: { "Content-Type": "application/x-www-form-urlencoded" },
-			body: `grant_type=refresh_token&client_id=${encodeURIComponent(this.o.clientId())}&refresh_token=${encodeURIComponent(this.o.refreshToken())}&scope=${encodeURIComponent(SCOPES)}`,
-			throw: false,
-		});
-		if (r.status !== 200) throw new DropboxError(`Could not refresh the Microsoft sign-in: ${r.status}`, r.status, r.status === 400 ? "invalid_grant" : `http_${r.status}`);
-		const body = JSON.parse(r.text) as { refresh_token?: string; access_token: string; expires_in: number };
-		const expiry = Date.now() + body.expires_in * 1000;
-		this.o.saveTokens(body.refresh_token ?? this.o.refreshToken(), body.access_token, expiry);
-		return body.access_token;
+		if (!force && a.token && Date.now() < a.expiry - 60_000) return a.token;
+		if (!this.refreshing) {
+			this.refreshing = (async () => {
+				try {
+					const r = await requestUrl({
+						url: `${LOGIN}/token`,
+						method: "POST",
+						headers: { "Content-Type": "application/x-www-form-urlencoded" },
+						body: `grant_type=refresh_token&client_id=${encodeURIComponent(this.o.clientId())}&refresh_token=${encodeURIComponent(this.o.refreshToken())}&scope=${encodeURIComponent(SCOPES)}`,
+						throw: false,
+					});
+					if (r.status !== 200)
+						throw new DropboxError(
+							`Could not refresh the Microsoft sign-in: ${r.status}`,
+							r.status,
+							r.status === 400 ? "invalid_grant" : `http_${r.status}`
+						);
+					const body = JSON.parse(r.text) as { refresh_token?: string; access_token?: string; expires_in?: number };
+					if (!body.access_token) throw new DropboxError("Microsoft returned an incomplete token response.", 0, "invalid_response");
+					const expiry = Date.now() + (body.expires_in ?? 3600) * 1000;
+					this.o.saveTokens(body.refresh_token ?? this.o.refreshToken(), body.access_token, expiry);
+					return body.access_token;
+				} finally {
+					this.refreshing = null;
+				}
+			})();
+		}
+		return this.refreshing;
 	}
 
 	/** One call with the shared retry ladder: refresh once on 401, honor
@@ -138,10 +162,7 @@ export class OneDrive {
 				continue;
 			}
 			if (r.status === 401 && attempt === 0) {
-				const a = this.o.access();
-				this.o.saveTokens(this.o.refreshToken(), "", 0);
-				void a;
-				auth = await this.accessToken();
+				auth = await this.accessToken(true);
 				continue;
 			}
 			if ((r.status === 429 || r.status >= 500) && attempt < 4) {
@@ -154,14 +175,37 @@ export class OneDrive {
 		}
 	}
 
+	/** Upload-session URLs are pre-authorized and must not receive the bearer
+	 * token. They still need the same retry discipline as ordinary Graph calls. */
+	private async uploadChunk(url: string, path: string, body: ArrayBuffer, start: number, end: number, total: number): Promise<RequestUrlResponse> {
+		for (let attempt = 0; ; attempt++) {
+			let r: RequestUrlResponse;
+			try {
+				r = await requestUrl({
+					url,
+					method: "PUT",
+					headers: { "Content-Length": String(end - start), "Content-Range": `bytes ${start}-${end - 1}/${total}` },
+					body,
+					throw: false,
+				});
+			} catch (e) {
+				if (attempt >= 4) throw new DropboxError(`Could not upload ${path}: network unreachable (${msg(e)}).`, 0, "network");
+				await sleep(backoffMs(attempt, 1000));
+				continue;
+			}
+			if ((r.status === 429 || r.status >= 500) && attempt < 4) {
+				const wait = parseRetryAfter(r.headers["retry-after"] ?? r.headers["Retry-After"] ?? "") || backoffMs(attempt, 1000);
+				this.o.log(`OneDrive is busy (${r.status}); retrying an upload in ${Math.round(wait / 1000)}s`);
+				await sleep(wait);
+				continue;
+			}
+			return r;
+		}
+	}
+
 	/** URL for an engine path like "/Root/sub/file.md" under the app folder. */
 	private itemUrl(path: string, suffix = ""): string {
-		const rel = normRel(path);
-		const enc = rel
-			.split("/")
-			.map(encodeURIComponent)
-			.join("/");
-		return rel ? `${GRAPH}/me/drive/special/approot:/${enc}${suffix ? ":" + suffix : ":"}` : `${GRAPH}/me/drive/special/approot${suffix}`;
+		return onedriveItemUrl(path, suffix);
 	}
 
 	private async approotBase(): Promise<string> {
@@ -169,17 +213,18 @@ export class OneDrive {
 		const r = await this.call(`${GRAPH}/me/drive/special/approot`, "reach the app folder");
 		if (r.status !== 200) throw graphError(r, "reach the app folder");
 		const it = JSON.parse(r.text) as { name: string; parentReference?: { path?: string } };
-		this.approotPath = `${it.parentReference?.path ?? "/drive/root:"}/${it.name}`;
+		const parent = it.parentReference?.path ?? "/drive/root:";
+		this.approotPath = onedriveReferencePath(parent, it.name);
+		this.approotDisplayPath = `${decodeURIComponent(parent)}/${it.name}`;
 		return this.approotPath;
 	}
 
 	private itemMeta(it: Record<string, unknown>): RemoteFileMeta {
 		const parent = ((it.parentReference as Record<string, unknown> | undefined)?.path as string | undefined) ?? "";
-		const relParent = decodeURIComponent(parent).slice(this.approotPath.length);
 		const file = it.file as Record<string, unknown> | undefined;
 		const hashes = (file?.hashes as Record<string, unknown> | undefined) ?? {};
 		return {
-			pathDisplay: `${relParent}/${String(it.name ?? "")}`,
+			pathDisplay: onedriveRelativePath(parent, this.approotDisplayPath, String(it.name ?? "")),
 			rev: String(it.eTag ?? ""),
 			size: Number(it.size ?? 0),
 			contentHash: String(hashes.quickXorHash ?? ""),
@@ -192,8 +237,7 @@ export class OneDrive {
 		for (const it of items) {
 			if (it.deleted) {
 				const parent = ((it.parentReference as Record<string, unknown> | undefined)?.path as string | undefined) ?? "";
-				const relParent = parent ? decodeURIComponent(parent).slice(this.approotPath.length) : "";
-				out.push({ tag: "deleted", pathDisplay: `${relParent}/${String(it.name ?? "")}` });
+				out.push({ tag: "deleted", pathDisplay: onedriveRelativePath(parent, this.approotDisplayPath, String(it.name ?? "")) });
 			} else if (it.folder) {
 				out.push({ tag: "folder", pathDisplay: this.itemMeta(it).pathDisplay });
 			} else if (it.file) {
@@ -228,7 +272,7 @@ export class OneDrive {
 		const entries: ListEntry[] = [];
 		let url = this.itemUrl(root, "/delta");
 		for (;;) {
-			const r = await this.call(url, "list the OneDrive folder");
+			const r = await this.call(url, "list the OneDrive folder", { headers: { deltaExcludeParent: "true" } });
 			if (r.status !== 200) throw graphError(r, "list the OneDrive folder");
 			const body = JSON.parse(r.text) as { value: Record<string, unknown>[]; "@odata.nextLink"?: string; "@odata.deltaLink"?: string };
 			entries.push(...this.toEntries(body.value));
@@ -242,7 +286,7 @@ export class OneDrive {
 		const entries: ListEntry[] = [];
 		let url = cursor;
 		for (;;) {
-			const r = await this.call(url, "read OneDrive changes");
+			const r = await this.call(url, "read OneDrive changes", { headers: { deltaExcludeParent: "true" } });
 			if (r.status === 410) throw new DropboxError("delta reset", 410, "reset");
 			if (r.status !== 200) throw graphError(r, "read OneDrive changes");
 			const body = JSON.parse(r.text) as { value: Record<string, unknown>[]; "@odata.nextLink"?: string; "@odata.deltaLink"?: string };
@@ -284,39 +328,62 @@ export class OneDrive {
 				body: bytes,
 			});
 			if (r.status !== 200 && r.status !== 201) throw graphError(r, `upload ${path}`);
-			return this.itemMeta(JSON.parse(r.text) as Record<string, unknown>);
+			const uploaded = JSON.parse(r.text) as Record<string, unknown>;
+			// The content endpoint cannot carry fileSystemInfo. Stamp the client's
+			// mtime immediately, guarded by the revision the upload just returned.
+			const stampHeaders: Record<string, string> = { "Content-Type": "application/json" };
+			if (uploaded.eTag) stampHeaders["If-Match"] = String(uploaded.eTag);
+			const stamped = await this.call(this.itemUrl(path), `preserve the timestamp for ${path}`, {
+				method: "PATCH",
+				headers: stampHeaders,
+				body: JSON.stringify({ fileSystemInfo: { lastModifiedDateTime: opts.clientModified } }),
+			});
+			if (stamped.status !== 200) throw graphError(stamped, `preserve the timestamp for ${path}`);
+			return this.itemMeta(JSON.parse(stamped.text) as Record<string, unknown>);
 		}
 		const rs = await this.call(this.itemUrl(path, "/createUploadSession"), `upload ${path}`, {
 			method: "POST",
 			headers: { ...headers, "Content-Type": "application/json" },
-			body: JSON.stringify({ item: { "@microsoft.graph.conflictBehavior": behavior } }),
+			body: JSON.stringify({
+				item: {
+					"@microsoft.graph.conflictBehavior": behavior,
+					fileSystemInfo: { lastModifiedDateTime: opts.clientModified },
+				},
+			}),
 		});
 		if (rs.status !== 200) throw graphError(rs, `upload ${path}`);
 		const session = (JSON.parse(rs.text) as { uploadUrl: string }).uploadUrl;
-		for (let off = 0; off < bytes.byteLength; off += CHUNK) {
+		let off = 0;
+		while (off < bytes.byteLength) {
 			const end = Math.min(off + CHUNK, bytes.byteLength);
-			const r = await requestUrl({
-				url: session,
-				method: "PUT",
-				headers: { "Content-Length": String(end - off), "Content-Range": `bytes ${off}-${end - 1}/${bytes.byteLength}` },
-				body: bytes.slice(off, end),
-				throw: false,
-			});
+			const r = await this.uploadChunk(session, path, bytes.slice(off, end), off, end, bytes.byteLength);
 			if (r.status === 200 || r.status === 201) return this.itemMeta(JSON.parse(r.text) as Record<string, unknown>);
 			if (r.status !== 202) throw graphError(r, `upload ${path}`);
+			const ranges = (JSON.parse(r.text) as { nextExpectedRanges?: string[] }).nextExpectedRanges ?? [];
+			const next = Number.parseInt(ranges[0]?.split("-")[0] ?? "", 10);
+			off = Number.isFinite(next) && next > off ? next : end;
 		}
 		throw new DropboxError(`Could not upload ${path}: the session ended without a result.`, 0, "network");
 	}
 
 	async move(from: string, to: string): Promise<RemoteFileMeta> {
-		const base = await this.approotBase();
+		await this.approotBase();
 		const toRel = normRel(to);
 		const parent = toRel.includes("/") ? toRel.slice(0, toRel.lastIndexOf("/")) : "";
 		const name = toRel.slice(toRel.lastIndexOf("/") + 1);
+		// parentReference.path is returned as useful metadata, but Graph marks it
+		// read-only. Resolve the target folder and move by its stable item id.
+		const parentMeta = await this.call(parent ? this.itemUrl(parent) : `${GRAPH}/me/drive/special/approot`, `find the destination for ${to}`);
+		if (parentMeta.status !== 200) throw graphError(parentMeta, `find the destination for ${to}`);
+		const parentId = String((JSON.parse(parentMeta.text) as { id?: string }).id ?? "");
+		if (!parentId) throw new DropboxError(`Could not find the destination for ${to}: OneDrive returned no folder id.`, 0, "invalid_response");
 		const r = await this.call(this.itemUrl(from), `move ${from}`, {
 			method: "PATCH",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ name, parentReference: { path: parent ? `${base}/${parent}` : base }, "@microsoft.graph.conflictBehavior": "fail" }),
+			body: JSON.stringify({
+				name,
+				parentReference: { id: parentId },
+			}),
 		});
 		if (r.status !== 200) throw graphError(r, `move ${from}`);
 		return this.itemMeta(JSON.parse(r.text) as Record<string, unknown>);
