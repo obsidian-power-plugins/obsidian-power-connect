@@ -5,6 +5,24 @@ import { normRel } from "./core";
 
 export const ONEDRIVE_GRAPH = "https://graph.microsoft.com/v1.0";
 
+/** Address a folder's children by its stable drive-item id.
+ *
+ * Microsoft documents this as the canonical create-child route. Using the
+ * app-root id avoids OneDrive Consumer rejecting POST requests made directly
+ * to /special/approot/children even though the corresponding GET succeeds. */
+export function onedriveChildrenUrl(itemId: string): string {
+	return `${ONEDRIVE_GRAPH}/me/drive/items/${encodeURIComponent(itemId)}/children`;
+}
+
+/** Read Graph's short-lived, pre-authorized content URL from file metadata.
+ * It must be requested without the Graph bearer token: forwarding that token
+ * to OneDrive's storage host makes some Consumer accounts reject the download
+ * as unauthenticated. */
+export function onedriveDownloadUrl(item: Record<string, unknown>): string {
+	const value = item["@microsoft.graph.downloadUrl"];
+	return typeof value === "string" ? value : "";
+}
+
 /** Address an item under the app folder.
  *
  * Graph's path form has two distinct shapes:

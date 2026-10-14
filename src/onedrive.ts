@@ -9,7 +9,7 @@
 
 import { requestUrl, RequestUrlResponse } from "obsidian";
 import { DropboxError, ListEntry, RemoteFileMeta, assertWholeDownload, backoffMs, msg, normRel, parseRetryAfter } from "./core";
-import { ONEDRIVE_GRAPH as GRAPH, onedriveItemUrl, onedriveReferencePath, onedriveRelativePath } from "./onedrive-core";
+import { ONEDRIVE_GRAPH as GRAPH, onedriveChildrenUrl, onedriveDownloadUrl, onedriveItemUrl, onedriveReferencePath, onedriveRelativePath } from "./onedrive-core";
 import { quickXorHash } from "./quickxor";
 
 const LOGIN = "https://login.microsoftonline.com/common/oauth2/v2.0";
@@ -99,6 +99,10 @@ export class OneDrive {
 	/** Absolute Graph path prefix of the app folder, e.g.
 	 *  "/drive/root:/Apps/Power Connect", learned on first use. */
 	private approotPath = "";
+	/** Stable drive-item id used for child creation. OneDrive Consumer can
+	 * reject POST /special/approot/children while accepting the same operation
+	 * through /items/{id}/children. */
+	private approotId = "";
 	/** Human-readable form of approotPath, used to trim itemReference paths. */
 	private approotDisplayPath = "";
 	/** Coalesce the burst of refreshes when a concurrent sync reaches expiry. */
@@ -203,6 +207,28 @@ export class OneDrive {
 		}
 	}
 
+	/** Download from Graph's short-lived pre-authorized URL. Never attach the
+	 * Microsoft Graph bearer token to the OneDrive storage host. */
+	private async downloadContent(url: string, path: string): Promise<RequestUrlResponse> {
+		for (let attempt = 0; ; attempt++) {
+			let r: RequestUrlResponse;
+			try {
+				r = await requestUrl({ url, method: "GET", throw: false });
+			} catch (e) {
+				if (attempt >= 4) throw new DropboxError(`Could not download ${path}: network unreachable (${msg(e)}).`, 0, "network");
+				await sleep(backoffMs(attempt, 1000));
+				continue;
+			}
+			if ((r.status === 429 || r.status >= 500) && attempt < 4) {
+				const wait = parseRetryAfter(r.headers["retry-after"] ?? r.headers["Retry-After"] ?? "") || backoffMs(attempt, 1000);
+				this.o.log(`OneDrive is busy (${r.status}); retrying a download in ${Math.round(wait / 1000)}s`);
+				await sleep(wait);
+				continue;
+			}
+			return r;
+		}
+	}
+
 	/** URL for an engine path like "/Root/sub/file.md" under the app folder. */
 	private itemUrl(path: string, suffix = ""): string {
 		return onedriveItemUrl(path, suffix);
@@ -212,8 +238,10 @@ export class OneDrive {
 		if (this.approotPath) return this.approotPath;
 		const r = await this.call(`${GRAPH}/me/drive/special/approot`, "reach the app folder");
 		if (r.status !== 200) throw graphError(r, "reach the app folder");
-		const it = JSON.parse(r.text) as { name: string; parentReference?: { path?: string } };
+		const it = JSON.parse(r.text) as { id?: string; name: string; parentReference?: { path?: string } };
+		if (!it.id) throw new DropboxError("Could not reach the app folder: Microsoft returned no folder id.", 502, "invalid_response");
 		const parent = it.parentReference?.path ?? "/drive/root:";
+		this.approotId = it.id;
 		this.approotPath = onedriveReferencePath(parent, it.name);
 		this.approotDisplayPath = `${decodeURIComponent(parent)}/${it.name}`;
 		return this.approotPath;
@@ -255,15 +283,26 @@ export class OneDrive {
 		await this.approotBase();
 		const segs = normRel(path).split("/").filter(Boolean);
 		let sofar = "";
+		let parentId = this.approotId;
 		for (const seg of segs) {
-			const parentUrl = sofar ? this.itemUrl(sofar, "/children") : `${GRAPH}/me/drive/special/approot/children`;
-			const r = await this.call(parentUrl, `create the folder ${seg}`, {
+			const r = await this.call(onedriveChildrenUrl(parentId), `create the folder ${seg}`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ name: seg, folder: {}, "@microsoft.graph.conflictBehavior": "fail" }),
 			});
 			if (r.status !== 201 && r.status !== 409) throw graphError(r, `create the folder ${seg}`);
 			sofar = sofar ? `${sofar}/${seg}` : seg;
+			if (r.status === 201) {
+				const created = JSON.parse(r.text) as { id?: string };
+				if (!created.id) throw new DropboxError(`Could not create the folder ${seg}: Microsoft returned no folder id.`, 502, "invalid_response");
+				parentId = created.id;
+			} else {
+				const existing = await this.call(this.itemUrl(sofar), `find the existing folder ${seg}`);
+				if (existing.status !== 200) throw graphError(existing, `find the existing folder ${seg}`);
+				const item = JSON.parse(existing.text) as { id?: string; folder?: unknown };
+				if (!item.id || !item.folder) throw new DropboxError(`Could not use the existing folder ${seg}: Microsoft returned an invalid folder.`, 502, "invalid_response");
+				parentId = item.id;
+			}
 		}
 	}
 
@@ -309,8 +348,11 @@ export class OneDrive {
 		await this.approotBase();
 		const rm = await this.call(this.itemUrl(path), `download ${path}`);
 		if (rm.status !== 200) throw graphError(rm, `download ${path}`);
-		const meta = this.itemMeta(JSON.parse(rm.text) as Record<string, unknown>);
-		const rc = await this.call(this.itemUrl(path, "/content"), `download ${path}`);
+		const item = JSON.parse(rm.text) as Record<string, unknown>;
+		const meta = this.itemMeta(item);
+		const downloadUrl = onedriveDownloadUrl(item);
+		if (!downloadUrl) throw new DropboxError(`Could not download ${path}: Microsoft returned no download URL.`, 502, "invalid_response");
+		const rc = await this.downloadContent(downloadUrl, path);
 		if (rc.status !== 200) throw graphError(rc, `download ${path}`);
 		assertWholeDownload(path, rc.arrayBuffer.byteLength, meta.size);
 		return { bytes: rc.arrayBuffer, meta };

@@ -97,7 +97,7 @@ import {
 	resolveShareFiles,
 } from "../src/share";
 import { FakeServer, SimDevice, bytesOf, contentSurvives, converge, fleetDiff, mulberry32, textOf } from "./sim";
-import { onedriveItemUrl, onedriveReferencePath, onedriveRelativePath } from "../src/onedrive-core";
+import { onedriveChildrenUrl, onedriveDownloadUrl, onedriveItemUrl, onedriveReferencePath, onedriveRelativePath } from "../src/onedrive-core";
 import manifest from "../manifest.json";
 import pkg from "../package.json";
 import versions from "../versions.json";
@@ -248,6 +248,13 @@ console.log("ignore rules");
 }
 console.log("OneDrive path addressing");
 {
+	eq(
+		onedriveChildrenUrl("01ABC def/#"),
+		"https://graph.microsoft.com/v1.0/me/drive/items/01ABC%20def%2F%23/children",
+		"folder creation uses the stable parent item id and safely encodes it"
+	);
+	eq(onedriveDownloadUrl({ "@microsoft.graph.downloadUrl": "https://storage.example/file?token=secret" }), "https://storage.example/file?token=secret", "pre-authorized download URL comes from metadata");
+	eq(onedriveDownloadUrl({}), "", "missing download URL is explicit rather than falling back to an authenticated redirect");
 	eq(
 		onedriveItemUrl("/Vault/A note #1%.md"),
 		"https://graph.microsoft.com/v1.0/me/drive/special/approot:/Vault/A%20note%20%231%25.md",
